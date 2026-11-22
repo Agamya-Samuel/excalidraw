@@ -1,0 +1,21 @@
+@keyframes cloud-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.cloud-skeleton {
+  background: var(--color-surface-high, #f1f0ff);
+  border-radius: 0.5rem;
+  animation: cloud-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cloud-skeleton {
+    animation: none;
+  }
+}

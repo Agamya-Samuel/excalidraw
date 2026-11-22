@@ -37,6 +37,7 @@ export const useHandleAppTheme = () => {
 
   useLayoutEffect(() => {
     localStorage.setItem(STORAGE_KEYS.LOCAL_STORAGE_THEME, appTheme);
+    window.dispatchEvent(new Event("excalidraw-theme-change"));
 
     if (appTheme === "system") {
       setEditorTheme(

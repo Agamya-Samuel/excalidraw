@@ -33,10 +33,11 @@ import {
   DELETED_ELEMENT_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
   ROOM_ID_BYTES,
+  STORAGE_PREFIXES,
 } from "../app_constants";
 
 import { encodeFilesForUpload } from "./FileManager";
-import { saveFilesToFirebase } from "./firebase";
+import { saveFiles } from "./supabase";
 
 import type { WS_SUBTYPES } from "../app_constants";
 
@@ -65,7 +66,7 @@ export const getSyncableElements = (
 const BACKEND_V2_GET = import.meta.env.VITE_APP_BACKEND_V2_GET_URL;
 const BACKEND_V2_POST = import.meta.env.VITE_APP_BACKEND_V2_POST_URL;
 
-const generateRoomId = async () => {
+export const generateRoomId = async () => {
   const buffer = new Uint8Array(ROOM_ID_BYTES);
   window.crypto.getRandomValues(buffer);
   return bytesToHexString(buffer);
@@ -285,8 +286,8 @@ export const exportToBackend = async (
       url.hash = `json=${json.id},${encryptionKey}`;
       const urlString = url.toString();
 
-      await saveFilesToFirebase({
-        prefix: `/files/shareLinks/${json.id}`,
+      await saveFiles({
+        prefix: `${STORAGE_PREFIXES.shareLinkFiles}/${json.id}`,
         files: filesToUpload,
       });
 

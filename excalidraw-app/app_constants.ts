@@ -4,6 +4,10 @@ export const INITIAL_SCENE_UPDATE_TIMEOUT = 5000;
 export const FILE_UPLOAD_TIMEOUT = 300;
 export const LOAD_IMAGES_TIMEOUT = 500;
 export const SYNC_FULL_SCENE_INTERVAL_MS = 20000;
+/** save a cloud board once edits pause for this long */
+export const CLOUD_DOC_SAVE_DEBOUNCE_MS = 1200;
+/** ...but never wait longer than this during continuous drawing */
+export const CLOUD_DOC_SAVE_MAX_WAIT_MS = 6000;
 export const SYNC_BROWSER_TABS_TIMEOUT = 50;
 export const CURSOR_SYNC_TIMEOUT = 33; // ~30fps
 export const DELETED_ELEMENT_TIMEOUT = 24 * 60 * 60 * 1000; // 1 day
@@ -29,10 +33,10 @@ export enum WS_SUBTYPES {
   USER_VISIBLE_SCENE_BOUNDS = "USER_VISIBLE_SCENE_BOUNDS",
 }
 
-export const FIREBASE_STORAGE_PREFIXES = {
-  shareLinkFiles: `/files/shareLinks`,
-  collabFiles: `/files/rooms`,
-};
+export const STORAGE_PREFIXES = {
+  shareLinkFiles: "shareLinks",
+  collabFiles: "rooms",
+} as const;
 
 export const ROOM_ID_BYTES = 10;
 

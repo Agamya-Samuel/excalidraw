@@ -13,7 +13,7 @@ import {
   removeMember,
   revokeInvite,
   setMemberRole,
-  setPublicRead,
+  setPublicAccess,
 } from "../documents";
 
 import { AppModal } from "./AppModal";
@@ -21,7 +21,7 @@ import { AppModal } from "./AppModal";
 import "./cloud.scss";
 
 import type { ActiveDoc } from "../cloudAtoms";
-import type { CloudDocWithRole, DocInvite } from "../documents";
+import type { CloudDocWithRole, DocInvite, PublicAccess } from "../documents";
 
 type Member = { user_id: string; email: string; role: string };
 
@@ -86,6 +86,7 @@ export const CloudShareDialog = ({
   const [confirmDisable, setConfirmDisable] = useState(false);
 
   const isOwner = doc.role === "owner";
+  const isMember = doc.isMember;
 
   const refresh = async () => {
     const [nextMeta, nextMembers, nextInvites] = await Promise.all([
@@ -99,6 +100,11 @@ export const CloudShareDialog = ({
   };
 
   useEffect(() => {
+    if (!isMember) {
+      setLoading(false);
+      return;
+    }
+
     let active = true;
     setLoading(true);
     setError("");
@@ -118,7 +124,7 @@ export const CloudShareDialog = ({
       active = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.docId]);
+  }, [doc.docId, isMember]);
 
   const run = async (key: string, action: () => Promise<void>) => {
     if (busy || loading) {
@@ -147,6 +153,41 @@ export const CloudShareDialog = ({
 
   const publicLink = getPublicViewLink(doc.docId, doc.roomKey);
   const isBusy = !!busy || loading;
+
+  const currentAccess: PublicAccess = meta?.public_edit
+    ? "edit"
+    : meta?.is_public
+    ? "view"
+    : "private";
+
+  if (!isMember) {
+    return (
+      <>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+          }}
+        >
+          <h3 style={{ margin: 0 }}>Board</h3>
+          <button
+            type="button"
+            onClick={handleClose}
+            aria-label="Close"
+            style={closeStyle}
+          >
+            ×
+          </button>
+        </div>
+        <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
+          This board was opened through a public link. Sign in to manage
+          sharing, or ask the owner for an invite.
+        </p>
+      </>
+    );
+  }
 
   return (
     <>
@@ -413,7 +454,7 @@ export const CloudShareDialog = ({
 
         {isOwner && (
           <div>
-            <strong>Public read-only link</strong>
+            <strong>General access</strong>
             <div
               style={{
                 display: "flex",
@@ -422,23 +463,26 @@ export const CloudShareDialog = ({
                 flexWrap: "wrap",
               }}
             >
-              <FilledButton
-                label={
-                  meta?.is_public ? "Disable public link" : "Enable public link"
-                }
-                status={busy === "public" ? "loading" : null}
+              <select
+                value={currentAccess}
                 disabled={isBusy}
-                onClick={() => {
-                  if (meta?.is_public) {
+                style={selectStyle}
+                onChange={(event) => {
+                  const access = event.target.value as PublicAccess;
+                  if (access === "private" && meta?.is_public) {
                     setConfirmDisable(true);
                     return;
                   }
                   void run("public", async () => {
-                    await setPublicRead(doc.docId, true);
+                    await setPublicAccess(doc.docId, access);
                     await refresh();
                   });
                 }}
-              />
+              >
+                <option value="private">Private (members only)</option>
+                <option value="view">Anyone with link can view</option>
+                <option value="edit">Anyone with link can edit</option>
+              </select>
             </div>
             {meta?.is_public && (
               <div
@@ -450,7 +494,11 @@ export const CloudShareDialog = ({
                 }}
               >
                 <TextField
-                  label="Anyone with this link can view"
+                  label={
+                    meta.public_edit
+                      ? "Anyone with this link can edit"
+                      : "Anyone with this link can view"
+                  }
                   readonly
                   fullWidth
                   value={publicLink}
@@ -466,6 +514,12 @@ export const CloudShareDialog = ({
               The decryption key stays in the URL fragment and never reaches the
               server.
             </small>
+            {meta?.public_edit && (
+              <small style={{ display: "block", opacity: 0.7 }}>
+                Anyone with this link can edit the board anonymously. They are
+                not listed as members.
+              </small>
+            )}
           </div>
         )}
 
@@ -475,7 +529,7 @@ export const CloudShareDialog = ({
 
       {confirmDisable && (
         <AppModal
-          title="Disable public link?"
+          title="Disable public access?"
           busy={busy === "public"}
           onClose={() => setConfirmDisable(false)}
           footer={
@@ -494,7 +548,7 @@ export const CloudShareDialog = ({
                 disabled={busy === "public"}
                 onClick={async () => {
                   await run("public", async () => {
-                    await setPublicRead(doc.docId, false);
+                    await setPublicAccess(doc.docId, "private");
                     await refresh();
                   });
                   setConfirmDisable(false);
@@ -505,7 +559,8 @@ export const CloudShareDialog = ({
         >
           <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
             Old public links stop working on the next load. Tabs that already
-            loaded the board may keep the copy they have. Re-enabling the link
+            loaded the board may keep the copy they have, and already-connected
+            public editors keep editing until they reload. Re-enabling the link
             uses the same key, so a leaked link becomes valid again.
           </p>
         </AppModal>

@@ -230,10 +230,6 @@ export const setPublicAccess = async (docId: string, access: PublicAccess) => {
   }
 };
 
-export const setPublicRead = async (docId: string, enabled: boolean) => {
-  await setPublicAccess(docId, enabled ? "view" : "private");
-};
-
 export const listInvites = async (): Promise<
   (DocInvite & { title: string })[]
 > => {

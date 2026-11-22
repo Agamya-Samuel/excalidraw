@@ -71,7 +71,7 @@ begin
   );
 end $$;
 
-select plan(15);
+select plan(22);
 
 -- owner ----------------------------------------------------------------------
 -- Regression for the INSERT ... RETURNING path the client uses via
@@ -193,6 +193,69 @@ select is(
   (select count(*)::int from public.get_public_doc('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')),
   1,
   'anon can resolve a public doc'
+);
+select is(
+  (
+    select public_edit
+    from public.get_public_doc('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+  ),
+  false,
+  'public doc defaults to view-only'
+);
+select is(
+  (
+    select room_id
+    from public.get_public_doc('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+  ),
+  'room-rls-test',
+  'public doc exposes the room id'
+);
+select throws_ok(
+  format(
+    'select public.save_doc_scene(%L, 2, 3, %L)',
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'nope'
+  ),
+  '42501',
+  'not_authorized',
+  'anon cannot save a view-only public scene'
+);
+
+-- anon, public edit ----------------------------------------------------------
+reset role;
+update public.documents
+  set is_public = true, public_edit = true
+  where id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+select pg_temp.login(null, null, 'anon');
+select is(
+  (
+    select public_edit
+    from public.get_public_doc('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+  ),
+  true,
+  'public-edit doc reports editable'
+);
+select is(
+  (select count(*)::int from public.doc_scenes),
+  1,
+  'anon can read a public-edit scene'
+);
+select lives_ok(
+  format(
+    'select public.save_doc_scene(%L, 2, 3, %L)',
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'anon-edit'
+  ),
+  'anon can save a public-edit scene'
+);
+select is(
+  (
+    select scene_version::int
+    from public.doc_scenes
+    where doc_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  ),
+  3,
+  'anon public-edit save bumps the scene version'
 );
 
 -- invitee --------------------------------------------------------------------

@@ -65,6 +65,15 @@ Implemented: disabling a public link sets `documents.is_public = false`. Old lin
 fail on the next load; already-open tabs keep the copy they decrypted. Re-enabling
 reuses the same `room_key`, so a leaked link becomes valid again.
 
+Public **editing** (`documents.public_edit = true`, shown as "Anyone with link can
+edit") lets fully unauthenticated guests write the scene and upload files under
+`docs/<docId>/` through `save_doc_scene`/storage policies. Switching back to view
+or private stops new writes immediately (the RPC rejects), but guests already
+connected keep broadcasting edits over the collab socket until they reload.
+Re-enabling edit reuses the same key, so a previously leaked edit link becomes
+valid again. Size-cap and rate-limit `p_blob` and uploads before exposing this
+publicly.
+
 Rotation is **not implemented** and is a separate flow:
 
 1. Require the owner and ensure no active collaborators (or add a key-epoch check
@@ -103,6 +112,8 @@ Only needed if old share links must keep their images.
 - Add Turnstile (or equivalent) to signup/sign-in.
 - Supabase Auth has built-in rate limits; configure them for production.
 - Consider quotas/rate limits for anonymous `scenes` and public-link traffic.
+- Public-edit links are unauthenticated write access: enforce blob-size caps,
+  per-IP/anon upload quotas, and monitoring for large scene/blob writes.
 - Monitor for unusually large scene/blob sizes and uploads.
 
 ## 10. Self-hosting (alternative to Pro)

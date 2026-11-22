@@ -330,6 +330,32 @@ export const listMembers = async (docId: string) => {
   return data ?? [];
 };
 
+export const listDocInvites = async (docId: string): Promise<DocInvite[]> => {
+  const { data, error } = await getSupabase()
+    .from("doc_invites")
+    .select("*")
+    .eq("doc_id", docId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as DocInvite[];
+};
+
+export const revokeInvite = async (docId: string, inviteId: string) => {
+  const { error } = await getSupabase()
+    .from("doc_invites")
+    .delete()
+    .eq("id", inviteId)
+    .eq("doc_id", docId);
+
+  if (error) {
+    throw error;
+  }
+};
+
 export const removeMember = async (docId: string, userId: string) => {
   const { error } = await getSupabase()
     .from("doc_members")

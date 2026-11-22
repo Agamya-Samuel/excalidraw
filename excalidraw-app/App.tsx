@@ -106,10 +106,12 @@ import { LoadingOverlay } from "./components/LoadingOverlay";
 import { ThemeScope } from "./components/ThemeScope";
 import { AuthProvider } from "./auth/AuthProvider";
 import { AuthDialog } from "./auth/components/AuthDialog";
-import { authStatusAtom } from "./auth/authAtoms";
-import { activeDocAtom } from "./cloud/cloudAtoms";
+import { authStatusAtom, authUserAtom } from "./auth/authAtoms";
+import { activeDocAtom, pendingDraftAtom } from "./cloud/cloudAtoms";
 import { Dashboard } from "./cloud/components/Dashboard";
+import { DraftRestoreDialog } from "./cloud/components/DraftRestoreDialog";
 import { getDocument, getPublicDoc } from "./cloud/documents";
+import { getCloudDraft } from "./cloud/draftStore";
 import { loadDocScene } from "./cloud/docScene";
 import { useCloudDocLiveSync } from "./cloud/hooks/useCloudDocLiveSync";
 import {
@@ -292,6 +294,22 @@ const initializeScene = async (opts: {
         // `persisted` is `[]` for a genuinely empty board and `null` when the
         // row could not be read, so prefer it over the socket scene.
         const baseElements = persisted ?? collabScene?.elements ?? [];
+
+        const userId = appJotaiStore.get(authUserAtom)?.id;
+        if (userId) {
+          void getCloudDraft(userId, doc.id)
+            .then((draft) => {
+              if (draft) {
+                appJotaiStore.set(pendingDraftAtom, {
+                  draft,
+                  serverElements: baseElements,
+                });
+              }
+            })
+            .catch((error) => {
+              console.error("Failed to read cloud draft", error);
+            });
+        }
 
         return {
           scene: {
@@ -545,6 +563,7 @@ const ExcalidrawWrapper = () => {
   useEffect(() => {
     return () => {
       appJotaiStore.set(activeDocAtom, null);
+      appJotaiStore.set(pendingDraftAtom, null);
     };
   }, []);
 
@@ -585,6 +604,7 @@ const ExcalidrawWrapper = () => {
   });
   const collabError = useAtomValue(collabErrorIndicatorAtom);
   const userToFollow = useAtomValue(userToFollowAtom);
+  const pendingDraft = useAtomValue(pendingDraftAtom);
 
   const viewportStatusFrame = useMemo(
     () =>
@@ -1420,6 +1440,13 @@ const ExcalidrawWrapper = () => {
           />
         )}
       </Excalidraw>
+      {pendingDraft && excalidrawAPI && (
+        <DraftRestoreDialog
+          pending={pendingDraft}
+          excalidrawAPI={excalidrawAPI}
+          onMerge={(elements) => collabAPI?.syncElements(elements)}
+        />
+      )}
     </div>
   );
 };

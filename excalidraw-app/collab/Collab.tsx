@@ -27,6 +27,7 @@ import { isImageElement, isInitializedImageElement } from "@excalidraw/element";
 import { AbortError } from "@excalidraw/excalidraw/errors";
 import { t } from "@excalidraw/excalidraw/i18n";
 import { withBatchedUpdates } from "@excalidraw/excalidraw/reactUtils";
+import { clearAppStateForLocalStorage } from "@excalidraw/excalidraw/appState";
 
 import throttle from "lodash.throttle";
 import { PureComponent } from "react";
@@ -92,14 +93,23 @@ import {
   saveUsernameToLocalStorage,
 } from "../data/localStorage";
 import { resetBrowserStateVersions } from "../data/tabSync";
-import { cloudSaveStatusAtom } from "../cloud/cloudAtoms";
+import { authUserAtom } from "../auth/authAtoms";
+import {
+  cloudConnectionStatusAtom,
+  cloudSaveStatusAtom,
+} from "../cloud/cloudAtoms";
+import { deleteCloudDraft, putCloudDraft } from "../cloud/draftStore";
 import { uploadThumbnail } from "../cloud/documents";
 import { navigate } from "../cloud/routes";
 
 import { collabErrorIndicatorAtom } from "./CollabError";
 import Portal from "./Portal";
 
-import type { CloudSaveStatus } from "../cloud/cloudAtoms";
+import type {
+  CloudConnectionStatus,
+  CloudSaveStatus,
+} from "../cloud/cloudAtoms";
+import type { CloudDraft } from "../cloud/draftStore";
 
 import type {
   SocketUpdateDataSource,
@@ -148,9 +158,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   docId: string | null = null;
   thumbnailTimer: number | null = null;
   private docLastSavedVersion: number | null = null;
+  private lastScheduledSceneVersion: number | null = null;
   private cloudSaveTimer: number | null = null;
   private cloudSaveMaxTimer: number | null = null;
   private saveStatusTimer: number | null = null;
+  private firstInRoomTimer: number | null = null;
+  private draftTimer: number | null = null;
   excalidrawAPI: CollabProps["excalidrawAPI"];
   activeIntervalId: number | null;
   idleTimeoutId: number | null;
@@ -248,6 +261,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     window.addEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
     window.addEventListener("online", this.onOfflineStatusToggle);
     window.addEventListener("offline", this.onOfflineStatusToggle);
+    window.addEventListener("online", this.onOnline);
+    window.addEventListener("pagehide", this.onPageHide);
     window.addEventListener(EVENT.UNLOAD, this.onUnload);
 
     const unsubOnUserFollow = this.excalidrawAPI.onUserFollow((payload) => {
@@ -310,6 +325,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
     window.removeEventListener("online", this.onOfflineStatusToggle);
     window.removeEventListener("offline", this.onOfflineStatusToggle);
+    window.removeEventListener("online", this.onOnline);
+    window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
     window.removeEventListener(EVENT.UNLOAD, this.onUnload);
     window.removeEventListener(EVENT.POINTER_MOVE, this.onPointerMove);
@@ -342,6 +359,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     const syncableElements = getSyncableElements(
       this.getSceneElementsIncludingDeleted(),
     );
+
+    if (this.docId) {
+      void this.writeDraft(syncableElements);
+    }
 
     if (
       this.isCollaborating() &&
@@ -410,7 +431,20 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     const isCloudDoc = !!this.docId;
     const sceneVersion = getSceneVersion(syncableElements);
 
+    if (
+      isCloudDoc &&
+      syncableElements.length === 0 &&
+      (this.docLastSavedVersion ?? 0) > 0
+    ) {
+      // empty canvas while the cloud copy has content: usually a failed or
+      // partial initial scene application. Never overwrite the cloud copy.
+      this.setSaveStatus("idle");
+      return;
+    }
+
     if (isCloudDoc && this.docLastSavedVersion === sceneVersion) {
+      this.lastScheduledSceneVersion = this.docLastSavedVersion;
+      this.clearDraft();
       this.setSaveStatus("saved");
       return;
     }
@@ -438,6 +472,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           (storedElements ??
             syncableElements) as readonly OrderedExcalidrawElement[],
         );
+        this.lastScheduledSceneVersion = this.docLastSavedVersion;
+        this.clearDraft();
         this.setSaveStatus("saved");
         this.scheduleThumbnail();
       }
@@ -448,7 +484,20 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       }
     } catch (error: any) {
       if (isCloudDoc) {
-        this.setSaveStatus("error");
+        const offline =
+          !navigator.onLine ||
+          appJotaiStore.get(cloudConnectionStatusAtom) === "offline";
+        if (offline) {
+          const cached = await this.writeDraft(syncableElements);
+          if (cached) {
+            this.resetErrorIndicator();
+            this.setSaveStatus("local");
+            return;
+          }
+          this.setSaveStatus("error");
+        } else {
+          this.setSaveStatus("error");
+        }
       }
       const errorMessage = /is longer than.*?bytes/.test(error.message)
         ? t("errors.collabSaveFailed_sizeExceeded")
@@ -536,7 +585,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.lastBroadcastedOrReceivedSceneVersion = -1;
     this.docId = null;
     this.docLastSavedVersion = null;
+    this.lastScheduledSceneVersion = null;
+    this.clearFirstInRoomTimer();
+    this.setConnectionStatus("idle");
     this.clearCloudSaveTimers();
+    if (this.draftTimer != null) {
+      window.clearTimeout(this.draftTimer);
+      this.draftTimer = null;
+    }
     if (this.thumbnailTimer) {
       window.clearTimeout(this.thumbnailTimer);
       this.thumbnailTimer = null;
@@ -642,7 +698,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     const generation = ++this.collabGeneration;
     this.docId = docId ?? null;
     this.docLastSavedVersion = null;
+    this.lastScheduledSceneVersion = null;
     this.cloudSceneLoaded = false;
+
+    if (this.docId) {
+      this.setConnectionStatus("connecting");
+    }
 
     if (!this.state.username) {
       import("@excalidraw/random-username").then(({ getRandomUsername }) => {
@@ -686,6 +747,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
 
     const fallbackInitializationHandler = () => {
+      if (this.docId) {
+        this.clearFirstInRoomTimer();
+        this.setConnectionStatus("offline");
+      }
       this.initializeRoom({
         roomLinkData: existingRoomLinkData,
         fetchScene: true,
@@ -709,6 +774,26 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       console.error(error);
       this.setErrorDialog(error.message);
       return null;
+    }
+
+    if (this.docId) {
+      this.portal.socket.on("connect", () => {
+        if (this.docId) {
+          this.setConnectionStatus("connecting");
+          this.scheduleFirstInRoomTimeout();
+        }
+      });
+      this.portal.socket.on("disconnect", () => {
+        if (this.docId) {
+          this.setConnectionStatus("offline");
+        }
+      });
+      this.portal.socket.on("connect_error", () => {
+        if (this.docId) {
+          this.setConnectionStatus("offline");
+        }
+      });
+      this.scheduleFirstInRoomTimeout();
     }
 
     if (existingRoomLinkData) {
@@ -753,6 +838,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           encryptedData,
           this.portal.roomKey,
         );
+
+        if (this.docId) {
+          this.clearFirstInRoomTimer();
+          this.setConnectionStatus("live");
+        }
 
         switch (decryptedData.type) {
           case WS_SUBTYPES.INVALID_RESPONSE:
@@ -851,8 +941,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     );
 
     this.portal.socket.on("first-in-room", async () => {
-      if (this.portal.socket) {
+      // keep this listener for cloud docs so reconnects can flip the status
+      // back to "live"; initializeRoom is a no-op once the scene is loaded
+      if (this.portal.socket && !this.docId) {
         this.portal.socket.off("first-in-room");
+      }
+      this.clearFirstInRoomTimer();
+      if (this.docId) {
+        this.setConnectionStatus("live");
       }
       const sceneData = await this.initializeRoom({
         fetchScene: true,
@@ -1032,6 +1128,19 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
+  private onOnline = () => {
+    if (this.docId) {
+      this.setConnectionStatus("connecting");
+      this.flushCloudSave();
+    }
+  };
+
+  private onPageHide = () => {
+    if (this.docId) {
+      void this.writeDraft();
+    }
+  };
+
   private onVisibilityChange = () => {
     if (document.hidden) {
       if (this.idleTimeoutId) {
@@ -1043,6 +1152,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         this.activeIntervalId = null;
       }
       if (this.docId) {
+        void this.writeDraft();
         this.flushCloudSave();
       }
       this.onIdleStateChange(UserIdleState.AWAY);
@@ -1172,10 +1282,19 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
     if (this.docId) {
-      if (getSceneVersion(elements) !== this.docLastSavedVersion) {
-        this.setSaveStatus("saving");
+      if (elements.length === 0 && (this.docLastSavedVersion ?? 0) > 0) {
+        return;
       }
-      this.queueSaveToCloudDoc();
+      const sceneVersion = getSceneVersion(elements);
+      if (
+        sceneVersion !== this.docLastSavedVersion &&
+        sceneVersion !== this.lastScheduledSceneVersion
+      ) {
+        this.lastScheduledSceneVersion = sceneVersion;
+        this.setSaveStatus("saving");
+        this.scheduleDraft(elements);
+        this.queueSaveToCloudDoc();
+      }
     } else {
       this.queueSaveToRoom();
     }
@@ -1243,6 +1362,90 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         appJotaiStore.set(cloudSaveStatusAtom, "idle");
       }, 2000);
     }
+  };
+
+  private getCurrentUserId = () => appJotaiStore.get(authUserAtom)?.id ?? null;
+
+  private scheduleDraft = (elements: readonly OrderedExcalidrawElement[]) => {
+    if (!this.docId) {
+      return;
+    }
+    if (this.draftTimer != null) {
+      window.clearTimeout(this.draftTimer);
+    }
+    this.draftTimer = window.setTimeout(() => {
+      this.draftTimer = null;
+      void this.writeDraft(elements);
+    }, 500);
+  };
+
+  private writeDraft = async (
+    elements?: readonly OrderedExcalidrawElement[],
+  ): Promise<boolean> => {
+    const docId = this.docId;
+    const userId = this.getCurrentUserId();
+    if (!docId || !userId) {
+      return false;
+    }
+
+    const draft: CloudDraft = {
+      userId,
+      docId,
+      elements: getSyncableElements(
+        elements ?? this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+      ),
+      appState: clearAppStateForLocalStorage(this.excalidrawAPI.getAppState()),
+      baseVersion: this.docLastSavedVersion,
+      updatedAt: Date.now(),
+    };
+
+    try {
+      if (JSON.stringify(draft).length > 5 * 1024 * 1024) {
+        console.warn("Cloud draft is too large to cache offline");
+        return false;
+      }
+      await putCloudDraft(draft);
+      return true;
+    } catch (error) {
+      console.error("Failed to cache cloud draft", error);
+      return false;
+    }
+  };
+
+  private clearDraft = () => {
+    if (this.draftTimer != null) {
+      window.clearTimeout(this.draftTimer);
+      this.draftTimer = null;
+    }
+    const docId = this.docId;
+    const userId = this.getCurrentUserId();
+    if (docId && userId) {
+      void deleteCloudDraft(userId, docId);
+    }
+  };
+
+  private setConnectionStatus = (status: CloudConnectionStatus) => {
+    appJotaiStore.set(cloudConnectionStatusAtom, status);
+  };
+
+  private clearFirstInRoomTimer = () => {
+    if (this.firstInRoomTimer != null) {
+      window.clearTimeout(this.firstInRoomTimer);
+      this.firstInRoomTimer = null;
+    }
+  };
+
+  private scheduleFirstInRoomTimeout = () => {
+    this.clearFirstInRoomTimer();
+    if (!this.docId) {
+      return;
+    }
+    this.firstInRoomTimer = window.setTimeout(() => {
+      this.firstInRoomTimer = null;
+      if (this.docId) {
+        this.setConnectionStatus("offline");
+      }
+    }, INITIAL_SCENE_UPDATE_TIMEOUT);
   };
 
   queueSaveToRoom = throttle(

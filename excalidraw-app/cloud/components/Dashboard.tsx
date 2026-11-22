@@ -22,6 +22,8 @@ import { encodeFilesForUpload } from "../../data/FileManager";
 import { LocalData } from "../../data/LocalData";
 import { importFromLocalStorage } from "../../data/localStorage";
 import { saveFiles } from "../../data/supabase";
+import { deleteCloudDraft } from "../draftStore";
+import { useDashboardRealtime } from "../hooks/useDashboardRealtime";
 import { navigate } from "../routes";
 
 import {
@@ -103,6 +105,8 @@ export const Dashboard = () => {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useDashboardRealtime(user, refresh);
 
   useEffect(() => {
     if (!user) {
@@ -250,6 +254,9 @@ export const Dashboard = () => {
     setError("");
     try {
       await deleteDocument(deleteTarget.id);
+      if (user) {
+        await deleteCloudDraft(user.id, deleteTarget.id);
+      }
       setDeleteTarget(null);
       await refresh();
     } catch (err: any) {
@@ -261,6 +268,7 @@ export const Dashboard = () => {
 
   const shell = (children: React.ReactNode) => (
     <ThemeScope
+      className="cloud-dashboard"
       style={{
         minHeight: "100vh",
         padding: "2rem",
@@ -493,6 +501,7 @@ export const Dashboard = () => {
         </div>
         {loading && docs.length === 0 ? (
           <div
+            className="cloud-card-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
@@ -533,6 +542,7 @@ export const Dashboard = () => {
           </div>
         ) : (
           <div
+            className="cloud-card-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",

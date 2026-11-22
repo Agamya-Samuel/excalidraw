@@ -8,16 +8,20 @@ import { getDocLink, getPublicViewLink } from "../routes";
 import {
   getDocument,
   inviteMember,
+  listDocInvites,
   listMembers,
   removeMember,
+  revokeInvite,
   setMemberRole,
   setPublicRead,
 } from "../documents";
 
+import { AppModal } from "./AppModal";
+
 import "./cloud.scss";
 
 import type { ActiveDoc } from "../cloudAtoms";
-import type { CloudDocWithRole } from "../documents";
+import type { CloudDocWithRole, DocInvite } from "../documents";
 
 type Member = { user_id: string; email: string; role: string };
 
@@ -72,22 +76,26 @@ export const CloudShareDialog = ({
 }) => {
   const [meta, setMeta] = useState<CloudDocWithRole | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [invites, setInvites] = useState<DocInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"editor" | "viewer">("editor");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
+  const [confirmDisable, setConfirmDisable] = useState(false);
 
   const isOwner = doc.role === "owner";
 
   const refresh = async () => {
-    const [nextMeta, nextMembers] = await Promise.all([
+    const [nextMeta, nextMembers, nextInvites] = await Promise.all([
       getDocument(doc.docId),
       listMembers(doc.docId),
+      doc.role === "owner" ? listDocInvites(doc.docId) : Promise.resolve([]),
     ]);
     setMeta(nextMeta);
     setMembers(nextMembers as Member[]);
+    setInvites(nextInvites as DocInvite[]);
   };
 
   useEffect(() => {
@@ -229,6 +237,73 @@ export const CloudShareDialog = ({
           </div>
         )}
 
+        {isOwner && (loading || invites.length > 0) && (
+          <div>
+            <strong>Pending invites</strong>
+            <div
+              style={{
+                display: "grid",
+                gap: "0.35rem",
+                maxHeight: 160,
+                overflowY: "auto",
+              }}
+            >
+              {loading ? (
+                <>
+                  <div
+                    className="cloud-skeleton"
+                    style={{ height: 30, width: "100%" }}
+                  />
+                  <div
+                    className="cloud-skeleton"
+                    style={{ height: 30, width: "100%" }}
+                  />
+                </>
+              ) : (
+                invites.map((invite) => (
+                  <div
+                    key={invite.id}
+                    style={{
+                      display: "flex",
+                      gap: "0.5rem",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={invite.email}
+                    >
+                      {invite.email}
+                    </span>
+                    <span style={{ opacity: 0.7, fontSize: "0.85rem" }}>
+                      {invite.role === "editor" ? "Can edit" : "Can view"}
+                    </span>
+                    <FilledButton
+                      variant="outlined"
+                      color="danger"
+                      label="Revoke"
+                      status={busy === `invite-${invite.id}` ? "loading" : null}
+                      disabled={isBusy}
+                      onClick={() =>
+                        run(`invite-${invite.id}`, async () => {
+                          await revokeInvite(doc.docId, invite.id);
+                          await refresh();
+                        })
+                      }
+                    />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
         <div>
           <strong>People with access</strong>
           <div
@@ -353,12 +428,16 @@ export const CloudShareDialog = ({
                 }
                 status={busy === "public" ? "loading" : null}
                 disabled={isBusy}
-                onClick={() =>
-                  run("public", async () => {
-                    await setPublicRead(doc.docId, !meta?.is_public);
+                onClick={() => {
+                  if (meta?.is_public) {
+                    setConfirmDisable(true);
+                    return;
+                  }
+                  void run("public", async () => {
+                    await setPublicRead(doc.docId, true);
                     await refresh();
-                  })
-                }
+                  });
+                }}
               />
             </div>
             {meta?.is_public && (
@@ -393,6 +472,44 @@ export const CloudShareDialog = ({
         {copied && <div style={alertStyle("notice")}>Copied {copied} link</div>}
         {error && <div style={alertStyle("error")}>{error}</div>}
       </div>
+
+      {confirmDisable && (
+        <AppModal
+          title="Disable public link?"
+          busy={busy === "public"}
+          onClose={() => setConfirmDisable(false)}
+          footer={
+            <>
+              <FilledButton
+                variant="outlined"
+                color="muted"
+                label="Cancel"
+                disabled={busy === "public"}
+                onClick={() => setConfirmDisable(false)}
+              />
+              <FilledButton
+                color="danger"
+                label="Disable"
+                status={busy === "public" ? "loading" : null}
+                disabled={busy === "public"}
+                onClick={async () => {
+                  await run("public", async () => {
+                    await setPublicRead(doc.docId, false);
+                    await refresh();
+                  });
+                  setConfirmDisable(false);
+                }}
+              />
+            </>
+          }
+        >
+          <p style={{ margin: 0, fontSize: "0.9rem", lineHeight: 1.5 }}>
+            Old public links stop working on the next load. Tabs that already
+            loaded the board may keep the copy they have. Re-enabling the link
+            uses the same key, so a leaked link becomes valid again.
+          </p>
+        </AppModal>
+      )}
     </>
   );
 };

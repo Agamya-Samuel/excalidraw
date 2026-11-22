@@ -19,3 +19,13 @@
     animation: none;
   }
 }
+
+@media (max-width: 640px) {
+  .cloud-dashboard {
+    padding: 1rem !important;
+  }
+
+  .cloud-card-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

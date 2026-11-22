@@ -28,7 +28,11 @@ type TextFieldProps = {
   className?: string;
   placeholder?: string;
   isRedacted?: boolean;
-  type?: "text" | "search";
+  type?: "text" | "search" | "email" | "password";
+  disabled?: boolean;
+  name?: string;
+  autoComplete?: string;
+  autoFocus?: boolean;
 } & ({ value: string } | { defaultValue: string });
 
 export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
@@ -45,6 +49,10 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
       icon,
       className,
       type,
+      disabled,
+      name,
+      autoComplete,
+      autoFocus,
       ...rest
     },
     ref,
@@ -96,6 +104,10 @@ export const TextField = forwardRef<HTMLInputElement, TextFieldProps>(
             }
             placeholder={placeholder}
             ref={innerRef}
+            disabled={disabled}
+            name={name}
+            autoComplete={autoComplete}
+            autoFocus={autoFocus}
             onChange={(event) => onChange?.(event.target.value)}
             onKeyDown={onKeyDown}
             type={type}

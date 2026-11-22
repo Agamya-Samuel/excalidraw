@@ -1,7 +1,9 @@
 import {
   CaptureUpdateAction,
+  exportScene,
   getSceneVersion,
   restoreElements,
+  THEME,
   zoomToFitBounds,
   reconcileElements,
 } from "@excalidraw/excalidraw";
@@ -54,9 +56,11 @@ import type { Mutable, ValueOf } from "@excalidraw/common/utility-types";
 
 import { appJotaiStore, atom } from "../app-jotai";
 import {
+  CLOUD_DOC_SAVE_DEBOUNCE_MS,
+  CLOUD_DOC_SAVE_MAX_WAIT_MS,
   CURSOR_SYNC_TIMEOUT,
   FILE_UPLOAD_MAX_BYTES,
-  FIREBASE_STORAGE_PREFIXES,
+  STORAGE_PREFIXES,
   INITIAL_SCENE_UPDATE_TIMEOUT,
   LOAD_IMAGES_TIMEOUT,
   WS_SUBTYPES,
@@ -75,21 +79,27 @@ import {
 } from "../data/FileManager";
 import { FileStatusStore } from "../data/fileStatusStore";
 import { LocalData } from "../data/LocalData";
+import { loadDocScene, saveDocScene } from "../cloud/docScene";
 import {
-  isSavedToFirebase,
-  loadFilesFromFirebase,
-  loadFromFirebase,
-  saveFilesToFirebase,
-  saveToFirebase,
-} from "../data/firebase";
+  isSceneSaved,
+  loadFiles,
+  loadScene,
+  saveFiles,
+  saveScene,
+} from "../data/supabase";
 import {
   importUsernameFromLocalStorage,
   saveUsernameToLocalStorage,
 } from "../data/localStorage";
 import { resetBrowserStateVersions } from "../data/tabSync";
+import { cloudSaveStatusAtom } from "../cloud/cloudAtoms";
+import { uploadThumbnail } from "../cloud/documents";
+import { navigate } from "../cloud/routes";
 
 import { collabErrorIndicatorAtom } from "./CollabError";
 import Portal from "./Portal";
+
+import type { CloudSaveStatus } from "../cloud/cloudAtoms";
 
 import type {
   SocketUpdateDataSource,
@@ -120,7 +130,7 @@ export interface CollabAPI {
   startCollaboration: CollabInstance["startCollaboration"];
   stopCollaboration: CollabInstance["stopCollaboration"];
   syncElements: CollabInstance["syncElements"];
-  fetchImageFilesFromFirebase: CollabInstance["fetchImageFilesFromFirebase"];
+  fetchImageFiles: CollabInstance["fetchImageFiles"];
   setUsername: CollabInstance["setUsername"];
   getUsername: CollabInstance["getUsername"];
   getActiveRoomLink: CollabInstance["getActiveRoomLink"];
@@ -135,6 +145,12 @@ interface CollabProps {
 class Collab extends PureComponent<CollabProps, CollabState> {
   portal: Portal;
   fileManager: FileManager;
+  docId: string | null = null;
+  thumbnailTimer: number | null = null;
+  private docLastSavedVersion: number | null = null;
+  private cloudSaveTimer: number | null = null;
+  private cloudSaveMaxTimer: number | null = null;
+  private saveStatusTimer: number | null = null;
   excalidrawAPI: CollabProps["excalidrawAPI"];
   activeIntervalId: number | null;
   idleTimeoutId: number | null;
@@ -144,6 +160,16 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   private collaborators = new Map<SocketId, Collaborator>();
   /** the socket ids of the users following the current user */
   private followedBy = new Set<SocketId>();
+
+  /** pending startCollaboration call, shared with duplicate callers */
+  private collaborationPromise: Promise<
+    | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
+    | null
+  > | null = null;
+  /** bumped whenever the socket is torn down to invalidate stale inits */
+  private collabGeneration = 0;
+  /** whether the persisted cloud doc scene has already been loaded */
+  private cloudSceneLoaded = false;
 
   constructor(props: CollabProps) {
     super(props);
@@ -162,7 +188,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           throw new AbortError();
         }
 
-        return loadFilesFromFirebase(`files/rooms/${roomId}`, roomKey, fileIds);
+        return loadFiles(
+          this.docId
+            ? `docs/${this.docId}`
+            : `${STORAGE_PREFIXES.collabFiles}/${roomId}`,
+          roomKey,
+          fileIds,
+        );
       },
       saveFiles: async ({ addedFiles }) => {
         const { roomId, roomKey } = this.portal;
@@ -170,8 +202,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
           throw new AbortError();
         }
 
-        const { savedFiles, erroredFiles } = await saveFilesToFirebase({
-          prefix: `${FIREBASE_STORAGE_PREFIXES.collabFiles}/${roomId}`,
+        const { savedFiles, erroredFiles } = await saveFiles({
+          prefix: this.docId
+            ? `docs/${this.docId}`
+            : `${STORAGE_PREFIXES.collabFiles}/${roomId}`,
           files: await encodeFilesForUpload({
             files: addedFiles,
             encryptionKey: roomKey,
@@ -239,7 +273,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       onPointerUpdate: this.onPointerUpdate,
       startCollaboration: this.startCollaboration,
       syncElements: this.syncElements,
-      fetchImageFilesFromFirebase: this.fetchImageFilesFromFirebase,
+      fetchImageFiles: this.fetchImageFiles,
       stopCollaboration: this.stopCollaboration,
       setUsername: this.setUsername,
       getUsername: this.getUsername,
@@ -266,6 +300,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   componentWillUnmount() {
+    // Leaving a cloud board must persist pending edits and close the socket.
+    // Otherwise the detached socket keeps the collab room non-empty, so the
+    // next visit never receives `first-in-room` and never reloads from the DB.
+    if (this.docId) {
+      this.flushCloudSave();
+    }
+    this.destroySocketClient();
+
     window.removeEventListener("online", this.onOfflineStatusToggle);
     window.removeEventListener("offline", this.onOfflineStatusToggle);
     window.removeEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
@@ -304,11 +346,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (
       this.isCollaborating() &&
       (this.fileManager.shouldPreventUnload(syncableElements) ||
-        !isSavedToFirebase(this.portal, syncableElements))
+        !isSceneSaved(this.portal, syncableElements))
     ) {
       // this won't run in time if user decides to leave the site, but
       //  the purpose is to run in immediately after user decides to stay
-      this.saveCollabRoomToFirebase(syncableElements);
+      this.saveCollabRoom(syncableElements);
 
       if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
         preventUnload(event);
@@ -320,23 +362,94 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   });
 
-  saveCollabRoomToFirebase = async (
+  private scheduleThumbnail = () => {
+    if (!this.docId) {
+      return;
+    }
+    if (this.thumbnailTimer) {
+      window.clearTimeout(this.thumbnailTimer);
+    }
+    this.thumbnailTimer = window.setTimeout(async () => {
+      this.thumbnailTimer = null;
+      const docId = this.docId;
+      if (!docId) {
+        return;
+      }
+      try {
+        const elements = this.excalidrawAPI.getSceneElements();
+        if (!elements.length) {
+          return;
+        }
+        const appState = this.excalidrawAPI.getAppState();
+        const blob = await exportScene({
+          type: "png",
+          data: {
+            elements,
+            appState,
+            files: this.excalidrawAPI.getFiles(),
+          },
+          config: {
+            maxWidthOrHeight: 640,
+            padding: 16,
+            scale: 1,
+            canvasBackgroundColor: "#ffffff",
+            theme: THEME.LIGHT,
+          },
+        });
+        await uploadThumbnail(docId, blob);
+      } catch (error) {
+        console.error("Failed to generate board thumbnail", error);
+      }
+    }, 4000);
+  };
+
+  saveCollabRoom = async (
     syncableElements: readonly SyncableExcalidrawElement[],
   ) => {
     syncableElements = cloneJSON(syncableElements);
-    try {
-      const storedElements = await saveToFirebase(
-        this.portal,
-        syncableElements,
-        this.excalidrawAPI.getAppState(),
-      );
+    const isCloudDoc = !!this.docId;
+    const sceneVersion = getSceneVersion(syncableElements);
 
+    if (isCloudDoc && this.docLastSavedVersion === sceneVersion) {
+      this.setSaveStatus("saved");
+      return;
+    }
+
+    if (isCloudDoc) {
+      this.setSaveStatus("saving");
+    }
+    try {
+      const storedElements = (this.docId && this.portal.roomKey
+        ? await saveDocScene({
+            docId: this.docId,
+            roomKey: this.portal.roomKey,
+            elements: syncableElements,
+            appState: this.excalidrawAPI.getAppState(),
+            baseVersion: this.docLastSavedVersion,
+          })
+        : await saveScene(
+            this.portal,
+            syncableElements,
+            this.excalidrawAPI.getAppState(),
+          )) as unknown as RemoteExcalidrawElement[] | null;
+
+      if (isCloudDoc) {
+        this.docLastSavedVersion = getSceneVersion(
+          (storedElements ??
+            syncableElements) as readonly OrderedExcalidrawElement[],
+        );
+        this.setSaveStatus("saved");
+        this.scheduleThumbnail();
+      }
       this.resetErrorIndicator();
 
       if (this.isCollaborating() && storedElements) {
         this.handleRemoteSceneUpdate(this._reconcileElements(storedElements));
       }
     } catch (error: any) {
+      if (isCloudDoc) {
+        this.setSaveStatus("error");
+      }
       const errorMessage = /is longer than.*?bytes/.test(error.message)
         ? t("errors.collabSaveFailed_sizeExceeded")
         : t("errors.collabSaveFailed");
@@ -364,11 +477,12 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   stopCollaboration = (keepRemoteState = true) => {
     this.queueBroadcastAllElements.cancel();
-    this.queueSaveToFirebase.cancel();
+    this.queueSaveToRoom.cancel();
+    this.clearCloudSaveTimers();
     this.loadImageFiles.cancel();
     this.resetErrorIndicator(true);
 
-    this.saveCollabRoomToFirebase(
+    this.saveCollabRoom(
       getSyncableElements(
         this.excalidrawAPI.getSceneElementsIncludingDeleted(),
       ),
@@ -389,7 +503,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // that could have been saved in other tabs while we were collaborating
       resetBrowserStateVersions();
 
-      window.history.pushState({}, APP_NAME, window.location.origin);
+      if (this.docId) {
+        navigate("/dashboard");
+      } else {
+        window.history.pushState({}, APP_NAME, window.location.origin);
+      }
       this.destroySocketClient();
 
       LocalData.fileStorage.reset();
@@ -411,7 +529,23 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private destroySocketClient = (opts?: { isUnload: boolean }) => {
+    // invalidate any in-flight startCollaboration and reset load state
+    this.collabGeneration++;
+    this.collaborationPromise = null;
+    this.cloudSceneLoaded = false;
     this.lastBroadcastedOrReceivedSceneVersion = -1;
+    this.docId = null;
+    this.docLastSavedVersion = null;
+    this.clearCloudSaveTimers();
+    if (this.thumbnailTimer) {
+      window.clearTimeout(this.thumbnailTimer);
+      this.thumbnailTimer = null;
+    }
+    if (this.saveStatusTimer != null) {
+      window.clearTimeout(this.saveStatusTimer);
+      this.saveStatusTimer = null;
+    }
+    appJotaiStore.set(cloudSaveStatusAtom, "idle");
     this.portal.close();
     this.fileManager.reset();
     this.followedBy = new Set();
@@ -427,7 +561,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  private fetchImageFilesFromFirebase = async (opts: {
+  private fetchImageFiles = async (opts: {
     elements: readonly ExcalidrawElement[];
     /**
      * Indicates whether to fetch files that are errored or pending and older
@@ -478,18 +612,43 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private fallbackInitializationHandler: null | (() => any) = null;
 
-  startCollaboration = async (
+  startCollaboration = (
     existingRoomLinkData: null | { roomId: string; roomKey: string },
+    docId?: string | null,
   ) => {
+    // The init effect can run more than once (React StrictMode, atom updates).
+    // Share the in-flight promise instead of returning `null`, which would
+    // resolve the initial scene as empty.
+    if (this.collaborationPromise) {
+      return this.collaborationPromise;
+    }
+
+    const promise: Promise<
+      | (ImportedDataState & { elements: readonly OrderedExcalidrawElement[] })
+      | null
+    > = this._startCollaboration(existingRoomLinkData, docId).finally(() => {
+      if (this.collaborationPromise === promise) {
+        this.collaborationPromise = null;
+      }
+    });
+    this.collaborationPromise = promise;
+    return promise;
+  };
+
+  private _startCollaboration = async (
+    existingRoomLinkData: null | { roomId: string; roomKey: string },
+    docId?: string | null,
+  ) => {
+    const generation = ++this.collabGeneration;
+    this.docId = docId ?? null;
+    this.docLastSavedVersion = null;
+    this.cloudSceneLoaded = false;
+
     if (!this.state.username) {
       import("@excalidraw/random-username").then(({ getRandomUsername }) => {
         const username = getRandomUsername();
         this.setUsername(username);
       });
-    }
-
-    if (this.portal.socket) {
-      return null;
     }
 
     let roomId;
@@ -499,11 +658,13 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       ({ roomId, roomKey } = existingRoomLinkData);
     } else {
       ({ roomId, roomKey } = await generateCollaborationLinkData());
-      window.history.pushState(
-        {},
-        APP_NAME,
-        getCollaborationLink({ roomId, roomKey }),
-      );
+      if (!this.docId) {
+        window.history.pushState(
+          {},
+          APP_NAME,
+          getCollaborationLink({ roomId, roomKey }),
+        );
+      }
     }
 
     // TODO: `ImportedDataState` type here seems abused
@@ -518,6 +679,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     const { default: socketIOClient } = await import(
       /* webpackChunkName: "socketIoClient" */ "socket.io-client"
     );
+
+    // a newer start (or an unmount) superseded this one while importing
+    if (generation !== this.collabGeneration) {
+      return null;
+    }
 
     const fallbackInitializationHandler = () => {
       this.initializeRoom({
@@ -564,7 +730,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
         captureUpdate: CaptureUpdateAction.NEVER,
       });
 
-      this.saveCollabRoomToFirebase(getSyncableElements(elements));
+      this.saveCollabRoom(getSyncableElements(elements));
     }
 
     // fallback in case you're not alone in the room but still don't receive
@@ -600,7 +766,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
               const reconciledElements =
                 this._reconcileElements(remoteElements);
               this.handleRemoteSceneUpdate(reconciledElements);
-              // noop if already resolved via init from firebase
+              // noop if already resolved via backend init
               scenePromise.resolve({
                 elements: reconciledElements,
                 scrollToContent: true,
@@ -704,6 +870,18 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       },
     );
 
+    // For cloud docs the persisted scene is the source of truth, so load it
+    // directly instead of depending on `first-in-room` (a stale/zombie socket
+    // or a peer already in the room would otherwise skip the DB read).
+    if (this.docId && existingRoomLinkData) {
+      void this.initializeRoom({
+        fetchScene: true,
+        roomLinkData: existingRoomLinkData,
+      }).then((scene) => {
+        scenePromise.resolve(scene);
+      });
+    }
+
     this.initializeIdleDetector();
 
     this.setActiveRoomLink(window.location.href);
@@ -728,15 +906,32 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
     if (fetchScene && roomLinkData && this.portal.socket) {
+      if (this.docId) {
+        // already loaded (or loading) the persisted scene; a later
+        // first-in-room / timeout fallback must not reset and wipe it
+        if (this.cloudSceneLoaded) {
+          return null;
+        }
+        this.cloudSceneLoaded = true;
+      }
+
       this.excalidrawAPI.resetScene();
 
       try {
-        const elements = await loadFromFirebase(
-          roomLinkData.roomId,
-          roomLinkData.roomKey,
-          this.portal.socket,
-        );
+        const elements = this.docId
+          ? await loadDocScene({
+              docId: this.docId,
+              roomKey: roomLinkData.roomKey,
+            })
+          : await loadScene(
+              roomLinkData.roomId,
+              roomLinkData.roomKey,
+              this.portal.socket,
+            );
         if (elements) {
+          if (this.docId) {
+            this.docLastSavedVersion = getSceneVersion(elements);
+          }
           this.setLastBroadcastedOrReceivedSceneVersion(
             getSceneVersion(elements),
           );
@@ -749,6 +944,10 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       } catch (error: any) {
         // log the error and move on. other peers will sync us the scene.
         console.error(error);
+        // allow a later fallback/first-in-room to retry the DB load
+        if (this.docId) {
+          this.cloudSceneLoaded = false;
+        }
       } finally {
         this.portal.socketInitialized = true;
       }
@@ -793,10 +992,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   };
 
   private loadImageFiles = throttle(async () => {
-    const { loadedFiles, erroredFiles } =
-      await this.fetchImageFilesFromFirebase({
-        elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
-      });
+    const { loadedFiles, erroredFiles } = await this.fetchImageFiles({
+      elements: this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+    });
 
     this.excalidrawAPI.addFiles(loadedFiles);
 
@@ -843,6 +1041,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       if (this.activeIntervalId) {
         window.clearInterval(this.activeIntervalId);
         this.activeIntervalId = null;
+      }
+      if (this.docId) {
+        this.flushCloudSave();
       }
       this.onIdleStateChange(UserIdleState.AWAY);
     } else {
@@ -970,7 +1171,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   syncElements = (elements: readonly OrderedExcalidrawElement[]) => {
     this.broadcastElements(elements);
-    this.queueSaveToFirebase();
+    if (this.docId) {
+      if (getSceneVersion(elements) !== this.docLastSavedVersion) {
+        this.setSaveStatus("saving");
+      }
+      this.queueSaveToCloudDoc();
+    } else {
+      this.queueSaveToRoom();
+    }
   };
 
   queueBroadcastAllElements = throttle(() => {
@@ -987,10 +1195,60 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.setLastBroadcastedOrReceivedSceneVersion(newVersion);
   }, SYNC_FULL_SCENE_INTERVAL_MS);
 
-  queueSaveToFirebase = throttle(
+  queueSaveToCloudDoc = () => {
+    if (this.cloudSaveTimer != null) {
+      window.clearTimeout(this.cloudSaveTimer);
+    }
+    this.cloudSaveTimer = window.setTimeout(
+      this.flushCloudSave,
+      CLOUD_DOC_SAVE_DEBOUNCE_MS,
+    );
+    if (this.cloudSaveMaxTimer == null) {
+      this.cloudSaveMaxTimer = window.setTimeout(
+        this.flushCloudSave,
+        CLOUD_DOC_SAVE_MAX_WAIT_MS,
+      );
+    }
+  };
+
+  flushCloudSave = () => {
+    this.clearCloudSaveTimers();
+    this.saveCollabRoom(
+      getSyncableElements(
+        this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+      ),
+    );
+  };
+
+  private clearCloudSaveTimers = () => {
+    if (this.cloudSaveTimer != null) {
+      window.clearTimeout(this.cloudSaveTimer);
+      this.cloudSaveTimer = null;
+    }
+    if (this.cloudSaveMaxTimer != null) {
+      window.clearTimeout(this.cloudSaveMaxTimer);
+      this.cloudSaveMaxTimer = null;
+    }
+  };
+
+  private setSaveStatus = (status: CloudSaveStatus) => {
+    if (this.saveStatusTimer != null) {
+      window.clearTimeout(this.saveStatusTimer);
+      this.saveStatusTimer = null;
+    }
+    appJotaiStore.set(cloudSaveStatusAtom, status);
+    if (status === "saved") {
+      this.saveStatusTimer = window.setTimeout(() => {
+        this.saveStatusTimer = null;
+        appJotaiStore.set(cloudSaveStatusAtom, "idle");
+      }, 2000);
+    }
+  };
+
+  queueSaveToRoom = throttle(
     () => {
       if (this.portal.socketInitialized) {
-        this.saveCollabRoomToFirebase(
+        this.saveCollabRoom(
           getSyncableElements(
             this.excalidrawAPI.getSceneElementsIncludingDeleted(),
           ),

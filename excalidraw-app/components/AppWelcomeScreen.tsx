@@ -5,15 +5,27 @@ import { WelcomeScreen } from "@excalidraw/excalidraw/index";
 import React from "react";
 
 import { isExcalidrawPlusSignedUser } from "../app_constants";
+import { useAtomValue, useSetAtom } from "../app-jotai";
+import {
+  authDialogOpenAtom,
+  authStatusAtom,
+  authUserAtom,
+} from "../auth/authAtoms";
+import { navigate } from "../cloud/routes";
+import { isCloudEnabled } from "../lib/supabase";
 
 export const AppWelcomeScreen: React.FC<{
   onCollabDialogOpen: () => any;
   isCollabEnabled: boolean;
 }> = React.memo((props) => {
   const { t } = useI18n();
+  const user = useAtomValue(authUserAtom);
+  const authStatus = useAtomValue(authStatusAtom);
+  const setAuthDialogOpen = useSetAtom(authDialogOpenAtom);
+  const cloud = isCloudEnabled();
   let headingContent;
 
-  if (isExcalidrawPlusSignedUser) {
+  if (!cloud && isExcalidrawPlusSignedUser) {
     headingContent = t("welcomeScreen.app.center_heading_plus")
       .split(/(Excalidraw\+)/)
       .map((bit, idx) => {
@@ -64,16 +76,30 @@ export const AppWelcomeScreen: React.FC<{
               onSelect={() => props.onCollabDialogOpen()}
             />
           )}
-          {!isExcalidrawPlusSignedUser && (
-            <WelcomeScreen.Center.MenuItemLink
-              href={`${
-                import.meta.env.VITE_APP_PLUS_LP
-              }/plus?utm_source=excalidraw&utm_medium=app&utm_content=welcomeScreenGuest`}
-              shortcut={null}
-              icon={loginIcon}
-            >
-              {t("labels.signUp")}
-            </WelcomeScreen.Center.MenuItemLink>
+          {cloud ? (
+            authStatus === "loading" ? null : (
+              <WelcomeScreen.Center.MenuItem
+                icon={loginIcon}
+                shortcut={null}
+                onSelect={() =>
+                  user ? navigate("/dashboard") : setAuthDialogOpen(true)
+                }
+              >
+                {user ? "My boards" : t("labels.signIn")}
+              </WelcomeScreen.Center.MenuItem>
+            )
+          ) : (
+            !isExcalidrawPlusSignedUser && (
+              <WelcomeScreen.Center.MenuItemLink
+                href={`${
+                  import.meta.env.VITE_APP_PLUS_LP
+                }/plus?utm_source=excalidraw&utm_medium=app&utm_content=welcomeScreenGuest`}
+                shortcut={null}
+                icon={loginIcon}
+              >
+                {t("labels.signUp")}
+              </WelcomeScreen.Center.MenuItemLink>
+            )
           )}
         </WelcomeScreen.Center.Menu>
       </WelcomeScreen.Center>

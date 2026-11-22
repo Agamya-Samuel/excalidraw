@@ -19,6 +19,8 @@ import { KEYS, getFrame } from "@excalidraw/common";
 import { useEffect, useRef, useState } from "react";
 
 import { atom, useAtom, useAtomValue } from "../app-jotai";
+import { activeDocAtom } from "../cloud/cloudAtoms";
+import { CloudShareDialog } from "../cloud/components/CloudShareDialog";
 import { activeRoomLinkAtom } from "../collab/Collab";
 
 import "./ShareDialog.scss";
@@ -246,11 +248,14 @@ const ShareDialogPicker = (props: ShareDialogProps) => {
 
 const ShareDialogInner = (props: ShareDialogProps) => {
   const activeRoomLink = useAtomValue(activeRoomLinkAtom);
+  const activeDoc = useAtomValue(activeDocAtom);
 
   return (
     <Dialog size="small" onCloseRequest={props.handleClose} title={false}>
       <div className="ShareDialog">
-        {props.collabAPI && activeRoomLink ? (
+        {activeDoc && props.type === "share" ? (
+          <CloudShareDialog doc={activeDoc} handleClose={props.handleClose} />
+        ) : props.collabAPI && activeRoomLink ? (
           <ActiveRoomDialog
             collabAPI={props.collabAPI}
             activeRoomLink={activeRoomLink}

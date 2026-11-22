@@ -13,6 +13,15 @@ import type { Theme } from "@excalidraw/element/types";
 
 import { LanguageList } from "../app-language/LanguageList";
 import { isExcalidrawPlusSignedUser } from "../app_constants";
+import { useAtomValue, useSetAtom } from "../app-jotai";
+import { signOut } from "../auth/AuthProvider";
+import {
+  authDialogOpenAtom,
+  authStatusAtom,
+  authUserAtom,
+} from "../auth/authAtoms";
+import { navigate } from "../cloud/routes";
+import { isCloudEnabled } from "../lib/supabase";
 
 import { saveDebugState } from "./DebugCanvas";
 
@@ -24,6 +33,18 @@ export const AppMainMenu: React.FC<{
   refresh: () => void;
 }> = React.memo((props) => {
   const { t } = useI18n();
+  const user = useAtomValue(authUserAtom);
+  const authStatus = useAtomValue(authStatusAtom);
+  const setAuthDialogOpen = useSetAtom(authDialogOpenAtom);
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } finally {
+      navigate("/dashboard");
+    }
+  };
+
   return (
     <MainMenu>
       <MainMenu.DefaultItems.LoadScene />
@@ -51,15 +72,37 @@ export const AppMainMenu: React.FC<{
         Excalidraw+
       </MainMenu.ItemLink>
       <MainMenu.DefaultItems.Socials />
-      <MainMenu.ItemLink
-        icon={loginIcon}
-        href={`${import.meta.env.VITE_APP_PLUS_APP}${
-          isExcalidrawPlusSignedUser ? "" : "/sign-up"
-        }?utm_source=signin&utm_medium=app&utm_content=hamburger`}
-        className="highlighted"
-      >
-        {isExcalidrawPlusSignedUser ? t("labels.signIn") : t("labels.signUp")}
-      </MainMenu.ItemLink>
+      {isCloudEnabled() ? (
+        authStatus === "loading" ? null : user ? (
+          <>
+            <MainMenu.Item
+              icon={loginIcon}
+              onSelect={() => navigate("/dashboard")}
+            >
+              My boards
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={handleSignOut}>Sign out</MainMenu.Item>
+          </>
+        ) : (
+          <MainMenu.Item
+            icon={loginIcon}
+            onSelect={() => setAuthDialogOpen(true)}
+            className="highlighted"
+          >
+            {t("labels.signIn")}
+          </MainMenu.Item>
+        )
+      ) : (
+        <MainMenu.ItemLink
+          icon={loginIcon}
+          href={`${import.meta.env.VITE_APP_PLUS_APP}${
+            isExcalidrawPlusSignedUser ? "" : "/sign-up"
+          }?utm_source=signin&utm_medium=app&utm_content=hamburger`}
+          className="highlighted"
+        >
+          {isExcalidrawPlusSignedUser ? t("labels.signIn") : t("labels.signUp")}
+        </MainMenu.ItemLink>
+      )}
       {isDevEnv() && (
         <MainMenu.Item
           icon={eyeIcon}

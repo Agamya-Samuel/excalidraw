@@ -43,7 +43,6 @@ import {
   DiscordIcon,
   ExcalLogo,
   usersIcon,
-  exportToPlus,
   share,
   youtubeIcon,
 } from "@excalidraw/excalidraw/components/icons";
@@ -88,7 +87,7 @@ import {
   appJotaiStore,
 } from "./app-jotai";
 import {
-  FIREBASE_STORAGE_PREFIXES,
+  STORAGE_PREFIXES,
   isExcalidrawPlusSignedUser,
   STORAGE_KEYS,
   SYNC_BROWSER_TABS_TIMEOUT,
@@ -102,11 +101,24 @@ import Collab, {
 import { AppFooter } from "./components/AppFooter";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
-import {
-  ExportToExcalidrawPlus,
-  exportToExcalidrawPlus,
-} from "./components/ExportToExcalidrawPlus";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
+import { LoadingOverlay } from "./components/LoadingOverlay";
+import { ThemeScope } from "./components/ThemeScope";
+import { AuthProvider } from "./auth/AuthProvider";
+import { AuthDialog } from "./auth/components/AuthDialog";
+import { authStatusAtom } from "./auth/authAtoms";
+import { activeDocAtom } from "./cloud/cloudAtoms";
+import { Dashboard } from "./cloud/components/Dashboard";
+import { getDocument, getPublicDoc } from "./cloud/documents";
+import { loadDocScene } from "./cloud/docScene";
+import { useCloudDocLiveSync } from "./cloud/hooks/useCloudDocLiveSync";
+import {
+  getDocIdFromPath,
+  getPublicViewData,
+  isDashboardPath,
+  navigate,
+} from "./cloud/routes";
+import { isCloudEnabled } from "./lib/supabase";
 
 import {
   exportToBackend,
@@ -122,7 +134,7 @@ import {
   importUsernameFromLocalStorage,
 } from "./data/localStorage";
 
-import { loadFilesFromFirebase } from "./data/firebase";
+import { loadFiles } from "./data/supabase";
 import {
   LibraryIndexedDBAdapter,
   LibraryLocalStorageMigrationAdapter,
@@ -231,6 +243,159 @@ const initializeScene = async (opts: {
   const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
 
   const localDataState = importFromLocalStorage();
+
+  const cloudDocId = isCloudEnabled() ? getDocIdFromPath() : null;
+  const publicView = isCloudEnabled() ? getPublicViewData() : null;
+
+  if (!cloudDocId && !publicView) {
+    appJotaiStore.set(activeDocAtom, null);
+  }
+
+  if (cloudDocId) {
+    try {
+      const doc = await getDocument(cloudDocId);
+
+      if (
+        doc &&
+        (doc.role === "owner" || doc.role === "editor") &&
+        opts.collabAPI
+      ) {
+        // The persisted scene is the source of truth on open. The socket is
+        // only used for live updates, and may resolve late, empty, or not at
+        // all (e.g. StrictMode double-init, stale/zombie room, WS downtime).
+        const [collabScene, persisted] = await Promise.all([
+          opts.collabAPI
+            .startCollaboration(
+              { roomId: doc.room_id, roomKey: doc.room_key },
+              doc.id,
+            )
+            .catch((error) => {
+              console.error("Failed to start collaboration", error);
+              return null;
+            }),
+          loadDocScene({ docId: doc.id, roomKey: doc.room_key }).catch(
+            (error) => {
+              console.error("Failed to load persisted cloud scene", error);
+              return null;
+            },
+          ),
+        ]);
+
+        appJotaiStore.set(activeDocAtom, {
+          docId: doc.id,
+          role: doc.role,
+          roomId: doc.room_id,
+          roomKey: doc.room_key,
+          isPublic: doc.is_public,
+        });
+
+        // `persisted` is `[]` for a genuinely empty board and `null` when the
+        // row could not be read, so prefer it over the socket scene.
+        const baseElements = persisted ?? collabScene?.elements ?? [];
+
+        return {
+          scene: {
+            ...collabScene,
+            appState: {
+              ...restoreAppState(
+                {
+                  ...collabScene?.appState,
+                  theme:
+                    localDataState?.appState?.theme ||
+                    collabScene?.appState?.theme,
+                },
+                opts.excalidrawAPI.getAppState(),
+              ),
+              isLoading: false,
+            },
+            elements: reconcileElements(
+              baseElements,
+              opts.excalidrawAPI.getSceneElementsIncludingDeleted() as RemoteExcalidrawElement[],
+              opts.excalidrawAPI.getAppState(),
+            ),
+          },
+          isExternalScene: true,
+          id: doc.room_id,
+          key: doc.room_key,
+        };
+      }
+
+      if (doc) {
+        const elements = await loadDocScene({
+          docId: doc.id,
+          roomKey: doc.room_key,
+        });
+
+        appJotaiStore.set(activeDocAtom, {
+          docId: doc.id,
+          role: doc.role,
+          roomId: doc.room_id,
+          roomKey: doc.room_key,
+          isPublic: doc.is_public,
+        });
+
+        return {
+          scene: {
+            elements: elements ?? [],
+            appState: {
+              viewModeEnabled: true,
+              isLoading: false,
+              theme: localDataState?.appState?.theme,
+            },
+          },
+          isExternalScene: true,
+          id: doc.room_id,
+          key: doc.room_key,
+        };
+      }
+    } catch (error: any) {
+      console.error(error);
+    }
+
+    appJotaiStore.set(activeDocAtom, null);
+    navigate("/");
+    return { scene: null, isExternalScene: false };
+  }
+
+  if (publicView) {
+    try {
+      const doc = await getPublicDoc(publicView.docId);
+
+      if (doc) {
+        const elements = await loadDocScene({
+          docId: publicView.docId,
+          roomKey: publicView.key,
+        });
+
+        appJotaiStore.set(activeDocAtom, {
+          docId: publicView.docId,
+          role: "viewer",
+          roomId: publicView.docId,
+          roomKey: publicView.key,
+          isPublic: true,
+        });
+
+        return {
+          scene: {
+            elements: elements ?? [],
+            appState: { viewModeEnabled: true, isLoading: false },
+          },
+          isExternalScene: true,
+          id: publicView.docId,
+          key: publicView.key,
+        };
+      }
+    } catch (error: any) {
+      console.error(error);
+    }
+
+    return {
+      scene: {
+        appState: { errorMessage: "This board is no longer public." },
+      },
+      isExternalScene: false,
+    };
+  }
 
   let scene: Omit<
     RestoredDataState,
@@ -375,6 +540,14 @@ const initializeScene = async (opts: {
 const ExcalidrawWrapper = () => {
   const excalidrawAPI = useExcalidrawAPI();
 
+  useCloudDocLiveSync(excalidrawAPI);
+
+  useEffect(() => {
+    return () => {
+      appJotaiStore.set(activeDocAtom, null);
+    };
+  }, []);
+
   const [errorMessage, setErrorMessage] = useState("");
   const isCollabDisabled = isRunningInIframe();
 
@@ -484,7 +657,7 @@ const ExcalidrawWrapper = () => {
       if (collabAPI?.isCollaborating()) {
         if (data.scene.elements) {
           collabAPI
-            .fetchImageFilesFromFirebase({
+            .fetchImageFiles({
               elements: data.scene.elements,
               forceFetchFiles: true,
             })
@@ -508,13 +681,16 @@ const ExcalidrawWrapper = () => {
 
         if (data.isExternalScene) {
           if (fileIds.length) {
-            // Direct Firebase call (not through FileManager), so track manually
+            // fetched directly (not through FileManager), so track manually
             FileStatusStore.updateStatuses(
               fileIds.map((id) => [id, "loading"]),
             );
           }
-          loadFilesFromFirebase(
-            `${FIREBASE_STORAGE_PREFIXES.shareLinkFiles}/${data.id}`,
+          const activeDoc = appJotaiStore.get(activeDocAtom);
+          loadFiles(
+            activeDoc
+              ? `docs/${activeDoc.docId}`
+              : `${STORAGE_PREFIXES.shareLinkFiles}/${data.id}`,
             data.key,
             fileIds,
           ).then(({ loadedFiles, erroredFiles }) => {
@@ -562,10 +738,14 @@ const ExcalidrawWrapper = () => {
       return;
     }
 
-    initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
-      loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(data.scene);
-    });
+    initializeScene({ collabAPI, excalidrawAPI })
+      .then(async (data) => {
+        loadImages(data, /* isInitialLoad */ true);
+        initialStatePromiseRef.current.promise.resolve(data.scene);
+      })
+      .catch((error: any) => {
+        console.error(error);
+      });
 
     const onHashChange = async (event: HashChangeEvent) => {
       event.preventDefault();
@@ -958,30 +1138,6 @@ const ExcalidrawWrapper = () => {
             toggleTheme: true,
             export: {
               onExportToBackend,
-              renderCustomUI: excalidrawAPI
-                ? (elements, appState, files) => {
-                    return (
-                      <ExportToExcalidrawPlus
-                        elements={elements}
-                        appState={appState}
-                        files={files}
-                        name={excalidrawAPI.getName()}
-                        onError={(error) => {
-                          excalidrawAPI?.updateScene({
-                            appState: {
-                              errorMessage: error.message,
-                            },
-                          });
-                        }}
-                        onSuccess={() => {
-                          excalidrawAPI.updateScene({
-                            appState: { openDialog: null },
-                          });
-                        }}
-                      />
-                    );
-                  }
-                : undefined,
             },
           },
         }}
@@ -1041,22 +1197,6 @@ const ExcalidrawWrapper = () => {
         <OverwriteConfirmDialog>
           <OverwriteConfirmDialog.Actions.ExportToImage />
           <OverwriteConfirmDialog.Actions.SaveToDisk />
-          {excalidrawAPI && (
-            <OverwriteConfirmDialog.Action
-              title={t("overwriteConfirm.action.excalidrawPlus.title")}
-              actionLabel={t("overwriteConfirm.action.excalidrawPlus.button")}
-              onClick={() => {
-                exportToExcalidrawPlus(
-                  excalidrawAPI.getSceneElements(),
-                  excalidrawAPI.getAppState(),
-                  excalidrawAPI.getFiles(),
-                  excalidrawAPI.getName(),
-                );
-              }}
-            >
-              {t("overwriteConfirm.action.excalidrawPlus.description")}
-            </OverwriteConfirmDialog.Action>
-          )}
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
@@ -1256,23 +1396,6 @@ const ExcalidrawWrapper = () => {
               : [ExcalidrawPlusCommand, ExcalidrawPlusAppCommand]),
 
             {
-              label: t("overwriteConfirm.action.excalidrawPlus.button"),
-              category: DEFAULT_CATEGORIES.export,
-              icon: exportToPlus,
-              predicate: true,
-              keywords: ["plus", "export", "save", "backup"],
-              perform: () => {
-                if (excalidrawAPI) {
-                  exportToExcalidrawPlus(
-                    excalidrawAPI.getSceneElements(),
-                    excalidrawAPI.getAppState(),
-                    excalidrawAPI.getFiles(),
-                    excalidrawAPI.getName(),
-                  );
-                }
-              },
-            },
-            {
               label: t("labels.installPWA"),
               category: DEFAULT_CATEGORIES.app,
               predicate: () => !!pwaEvent,
@@ -1301,6 +1424,54 @@ const ExcalidrawWrapper = () => {
   );
 };
 
+const ExcalidrawAppRoutes = () => {
+  const [, forceRender] = useState(0);
+  const authStatus = useAtomValue(authStatusAtom);
+
+  useEffect(() => {
+    const onPopState = () => forceRender((value) => value + 1);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const isCloudRoot =
+    isCloudEnabled() &&
+    window.location.pathname === "/" &&
+    !window.location.search &&
+    !window.location.hash;
+
+  useEffect(() => {
+    if (isCloudRoot && authStatus === "authenticated") {
+      navigate("/dashboard");
+    }
+  }, [authStatus, isCloudRoot]);
+
+  if (isCloudRoot && authStatus !== "unauthenticated") {
+    return (
+      <ThemeScope style={{ minHeight: "100vh" }}>
+        <LoadingOverlay
+          label={
+            authStatus === "loading"
+              ? "Checking your session..."
+              : "Opening your boards..."
+          }
+        />
+      </ThemeScope>
+    );
+  }
+
+  return (
+    <ExcalidrawAPIProvider>
+      {isCloudEnabled() && isDashboardPath() ? (
+        <Dashboard />
+      ) : (
+        <ExcalidrawWrapper />
+      )}
+      <AuthDialog />
+    </ExcalidrawAPIProvider>
+  );
+};
+
 const ExcalidrawApp = () => {
   const isCloudExportWindow =
     window.location.pathname === "/excalidraw-plus-export";
@@ -1311,9 +1482,9 @@ const ExcalidrawApp = () => {
   return (
     <TopErrorBoundary>
       <Provider store={appJotaiStore}>
-        <ExcalidrawAPIProvider>
-          <ExcalidrawWrapper />
-        </ExcalidrawAPIProvider>
+        <AuthProvider>
+          <ExcalidrawAppRoutes />
+        </AuthProvider>
       </Provider>
     </TopErrorBoundary>
   );

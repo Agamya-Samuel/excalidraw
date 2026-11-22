@@ -19,6 +19,9 @@ jobs:
         with:
           node-version: 20.x
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Create report file
         run: |
           yarn locales-coverage

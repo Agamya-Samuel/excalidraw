@@ -11,6 +11,10 @@ export type ActiveDoc = {
   roomId: string;
   roomKey: string;
   isPublic: boolean;
+  /** true when the viewer is a signed-in owner/member (has a real role row) */
+  isMember: boolean;
+  /** true when the board was opened through an edit-enabled public link */
+  publicEdit?: boolean;
 };
 
 export const activeDocAtom = atom<ActiveDoc | null>(null);

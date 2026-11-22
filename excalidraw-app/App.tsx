@@ -289,6 +289,7 @@ const initializeScene = async (opts: {
           roomId: doc.room_id,
           roomKey: doc.room_key,
           isPublic: doc.is_public,
+          isMember: true,
         });
 
         // `persisted` is `[]` for a genuinely empty board and `null` when the
@@ -350,6 +351,7 @@ const initializeScene = async (opts: {
           roomId: doc.room_id,
           roomKey: doc.room_key,
           isPublic: doc.is_public,
+          isMember: true,
         });
 
         return {
@@ -380,6 +382,65 @@ const initializeScene = async (opts: {
       const doc = await getPublicDoc(publicView.docId);
 
       if (doc) {
+        if (doc.public_edit && opts.collabAPI) {
+          const [collabScene, persisted] = await Promise.all([
+            opts.collabAPI
+              .startCollaboration(
+                { roomId: doc.room_id, roomKey: publicView.key },
+                doc.id,
+              )
+              .catch((error) => {
+                console.error("Failed to start collaboration", error);
+                return null;
+              }),
+            loadDocScene({
+              docId: publicView.docId,
+              roomKey: publicView.key,
+            }).catch((error) => {
+              console.error("Failed to load public scene", error);
+              return null;
+            }),
+          ]);
+
+          appJotaiStore.set(activeDocAtom, {
+            docId: publicView.docId,
+            role: "editor",
+            roomId: doc.room_id,
+            roomKey: publicView.key,
+            isPublic: true,
+            isMember: false,
+            publicEdit: true,
+          });
+
+          const baseElements = persisted ?? collabScene?.elements ?? [];
+
+          return {
+            scene: {
+              ...collabScene,
+              appState: {
+                ...restoreAppState(
+                  {
+                    ...collabScene?.appState,
+                    theme:
+                      localDataState?.appState?.theme ||
+                      collabScene?.appState?.theme,
+                  },
+                  opts.excalidrawAPI.getAppState(),
+                ),
+                isLoading: false,
+              },
+              elements: reconcileElements(
+                baseElements,
+                opts.excalidrawAPI.getSceneElementsIncludingDeleted() as RemoteExcalidrawElement[],
+                opts.excalidrawAPI.getAppState(),
+              ),
+            },
+            isExternalScene: true,
+            id: doc.room_id,
+            key: publicView.key,
+          };
+        }
+
         const elements = await loadDocScene({
           docId: publicView.docId,
           roomKey: publicView.key,
@@ -388,9 +449,10 @@ const initializeScene = async (opts: {
         appJotaiStore.set(activeDocAtom, {
           docId: publicView.docId,
           role: "viewer",
-          roomId: publicView.docId,
+          roomId: doc.room_id,
           roomKey: publicView.key,
           isPublic: true,
+          isMember: false,
         });
 
         return {
@@ -399,7 +461,7 @@ const initializeScene = async (opts: {
             appState: { viewModeEnabled: true, isLoading: false },
           },
           isExternalScene: true,
-          id: publicView.docId,
+          id: doc.room_id,
           key: publicView.key,
         };
       }

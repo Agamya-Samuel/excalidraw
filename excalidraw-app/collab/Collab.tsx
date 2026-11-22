@@ -552,7 +552,7 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       // that could have been saved in other tabs while we were collaborating
       resetBrowserStateVersions();
 
-      if (this.docId) {
+      if (this.docId && this.getCurrentUserId()) {
         navigate("/dashboard");
       } else {
         window.history.pushState({}, APP_NAME, window.location.origin);

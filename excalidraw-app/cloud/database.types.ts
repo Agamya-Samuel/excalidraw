@@ -170,6 +170,7 @@ export type Database = {
           is_public: boolean;
           owner_email: string;
           owner_id: string;
+          public_edit: boolean;
           room_id: string;
           room_key: string;
           scene_version: number;
@@ -184,6 +185,7 @@ export type Database = {
           is_public?: boolean;
           owner_email: string;
           owner_id: string;
+          public_edit?: boolean;
           room_id: string;
           room_key: string;
           scene_version?: number;
@@ -197,6 +199,7 @@ export type Database = {
           is_public?: boolean;
           owner_email?: string;
           owner_id?: string;
+          public_edit?: boolean;
           room_id?: string;
           room_key?: string;
           scene_version?: number;
@@ -267,6 +270,8 @@ export type Database = {
         Args: { p_doc: string };
         Returns: {
           id: string;
+          public_edit: boolean;
+          room_id: string;
           scene_version: number;
           title: string;
           updated_at: string;
@@ -274,6 +279,7 @@ export type Database = {
       };
       is_doc_member: { Args: { p_doc: string }; Returns: boolean };
       is_doc_public: { Args: { p_doc: string }; Returns: boolean };
+      is_doc_public_edit: { Args: { p_doc: string }; Returns: boolean };
       save_anonymous_scene: {
         Args: {
           p_base_version: number;

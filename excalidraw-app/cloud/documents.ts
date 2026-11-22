@@ -19,6 +19,7 @@ export type CloudDoc = {
   room_id: string;
   room_key: string;
   is_public: boolean;
+  public_edit: boolean;
   thumbnail_path: string | null;
   scene_version: number;
   created_at: string;
@@ -212,15 +213,25 @@ export const deleteDocument = async (docId: string) => {
   }
 };
 
-export const setPublicRead = async (docId: string, enabled: boolean) => {
+export type PublicAccess = "private" | "view" | "edit";
+
+export const setPublicAccess = async (docId: string, access: PublicAccess) => {
   const { error } = await getSupabase()
     .from("documents")
-    .update({ is_public: enabled, updated_at: new Date().toISOString() })
+    .update({
+      is_public: access !== "private",
+      public_edit: access === "edit",
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", docId);
 
   if (error) {
     throw error;
   }
+};
+
+export const setPublicRead = async (docId: string, enabled: boolean) => {
+  await setPublicAccess(docId, enabled ? "view" : "private");
 };
 
 export const listInvites = async (): Promise<

@@ -27,3 +27,7 @@ dev-dist
 html
 meta*.json
 .claude
+
+# supabase local state
+supabase/.temp/
+supabase/.branches/

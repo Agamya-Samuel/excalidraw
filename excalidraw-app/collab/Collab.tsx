@@ -1388,12 +1388,24 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       return false;
     }
 
+    const syncableElements = getSyncableElements(
+      elements ?? this.excalidrawAPI.getSceneElementsIncludingDeleted(),
+    );
+
+    // Page-hide/visibility-change handlers always write a draft. Skip it when
+    // the canvas already matches the last successful save so reopening the
+    // board doesn't trigger the "unsaved changes" dialog for nothing.
+    if (
+      this.docLastSavedVersion != null &&
+      getSceneVersion(syncableElements) === this.docLastSavedVersion
+    ) {
+      return false;
+    }
+
     const draft: CloudDraft = {
       userId,
       docId,
-      elements: getSyncableElements(
-        elements ?? this.excalidrawAPI.getSceneElementsIncludingDeleted(),
-      ),
+      elements: syncableElements,
       appState: clearAppStateForLocalStorage(this.excalidrawAPI.getAppState()),
       baseVersion: this.docLastSavedVersion,
       updatedAt: Date.now(),

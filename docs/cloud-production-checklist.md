@@ -12,10 +12,10 @@ Supabase Dashboard → Authentication → URL Configuration:
 
 ## 2. Email (SMTP)
 
-The built-in sender is limited to roughly 2 emails/hour and is not production-safe.
+Supabase's built-in sender is limited to roughly 2 emails/hour and is not production-safe (this is what throttles registration). Send through your own provider instead:
 
-1. Create a Resend/Brevo/SES account and verify the sending domain.
-2. Supabase Dashboard → Authentication → SMTP: host, port, user, password, sender name/email.
+1. Create a Resend/Brevo/SES/Mailgun account and verify the sending domain.
+2. Supabase Dashboard → Authentication → Emails → SMTP Settings: host, port, user, password, sender name/email. This removes the built-in rate limit for auth emails. Self-hosted equivalent: `[auth.smtp]` in `supabase/config.toml`.
 3. Test signup confirmation and password reset.
 4. Keep “Confirm email” enabled in production; disable it only for local testing.
 

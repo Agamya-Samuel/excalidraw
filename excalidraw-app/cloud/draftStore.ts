@@ -1,6 +1,7 @@
 import { clear, createStore, del, get, set } from "idb-keyval";
 
 import type { AppState } from "@excalidraw/excalidraw/types";
+import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 
 import type { SyncableExcalidrawElement } from "../data";
 
@@ -27,6 +28,25 @@ export const putCloudDraft = async (draft: CloudDraft) => {
 export const deleteCloudDraft = async (userId: string, docId: string) => {
   await del(keyFor(userId, docId), store);
 };
+
+/**
+ * A draft can outlive its own usefulness: visibility/page-hide handlers write
+ * one even when the canvas was already saved. Treat it as redundant when it
+ * matches the scene loaded from the cloud.
+ */
+export const isCloudDraftRedundant = (
+  draft: CloudDraft,
+  serverElements: readonly OrderedExcalidrawElement[],
+) =>
+  draft.elements.length === serverElements.length &&
+  draft.elements.every((element, index) => {
+    const serverElement = serverElements[index];
+    return (
+      element.id === serverElement.id &&
+      element.version === serverElement.version &&
+      element.versionNonce === serverElement.versionNonce
+    );
+  });
 
 export const clearCloudDrafts = async () => {
   await clear(store);

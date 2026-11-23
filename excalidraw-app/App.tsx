@@ -111,7 +111,11 @@ import { activeDocAtom, pendingDraftAtom } from "./cloud/cloudAtoms";
 import { Dashboard } from "./cloud/components/Dashboard";
 import { DraftRestoreDialog } from "./cloud/components/DraftRestoreDialog";
 import { getDocument, getPublicDoc } from "./cloud/documents";
-import { getCloudDraft } from "./cloud/draftStore";
+import {
+  deleteCloudDraft,
+  getCloudDraft,
+  isCloudDraftRedundant,
+} from "./cloud/draftStore";
 import { loadDocScene } from "./cloud/docScene";
 import { useCloudDocLiveSync } from "./cloud/hooks/useCloudDocLiveSync";
 import {
@@ -300,12 +304,18 @@ const initializeScene = async (opts: {
         if (userId) {
           void getCloudDraft(userId, doc.id)
             .then((draft) => {
-              if (draft) {
-                appJotaiStore.set(pendingDraftAtom, {
-                  draft,
-                  serverElements: baseElements,
-                });
+              if (!draft) {
+                return;
               }
+              // Only offer to restore changes that aren't already in the cloud.
+              if (isCloudDraftRedundant(draft, baseElements)) {
+                void deleteCloudDraft(userId, doc.id);
+                return;
+              }
+              appJotaiStore.set(pendingDraftAtom, {
+                draft,
+                serverElements: baseElements,
+              });
             })
             .catch((error) => {
               console.error("Failed to read cloud draft", error);

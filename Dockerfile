@@ -25,4 +25,4 @@ FROM nginx:stable-alpine-slim@sha256:2c605dbeab79a6b2a63340474fe58119d0ef95bdc4b
 COPY --from=build /opt/node_app/excalidraw-app/build /usr/share/nginx/html
 COPY excalidraw-app/nginx.conf /etc/nginx/conf.d/default.conf
 
-HEALTHCHECK CMD wget -q -O /dev/null http://localhost || exit 1
+HEALTHCHECK CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1

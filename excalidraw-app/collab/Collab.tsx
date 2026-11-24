@@ -176,6 +176,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   private socketInitializationTimer?: number;
   private lastBroadcastedOrReceivedSceneVersion: number = -1;
   private collaborators = new Map<SocketId, Collaborator>();
+  private pendingCollaboratorUpdates = new Map<
+    SocketId,
+    Partial<Collaborator>
+  >();
+  private collaboratorUpdateFrame: number | null = null;
   /** the socket ids of the users following the current user */
   private followedBy = new Set<SocketId>();
 
@@ -332,6 +337,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       this.flushCloudSave();
     }
     this.destroySocketClient();
+    // Do not leave a destroyed Collab instance in the atom: a remount would
+    // call startCollaboration on it and leak a socket.
+    appJotaiStore.set(collabAPIAtom, null);
 
     window.removeEventListener("online", this.onOfflineStatusChange);
     window.removeEventListener("offline", this.onOfflineStatusChange);
@@ -592,6 +600,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     // invalidate any in-flight startCollaboration and reset load state
     this.collabGeneration++;
     this.collaborationPromise = null;
+    if (this.collaboratorUpdateFrame != null) {
+      window.cancelAnimationFrame(this.collaboratorUpdateFrame);
+      this.collaboratorUpdateFrame = null;
+    }
+    this.pendingCollaboratorUpdates.clear();
     this.cloudSceneLoaded = false;
     this.lastBroadcastedOrReceivedSceneVersion = -1;
     this.docId = null;
@@ -706,6 +719,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     existingRoomLinkData: null | { roomId: string; roomKey: string },
     docId?: string | null,
   ) => {
+    if (this.portal.socket) {
+      // Never leave an old socket behind if collaboration is restarted on the
+      // same instance (e.g. repeated init effects).
+      this.destroySocketClient();
+    }
     const generation = ++this.collabGeneration;
     this.docId = docId ?? null;
     this.docLastSavedVersion = null;
@@ -1214,6 +1232,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       );
     }
     this.collaborators = collaborators;
+    for (const socketId of this.pendingCollaboratorUpdates.keys()) {
+      if (!collaborators.has(socketId)) {
+        this.pendingCollaboratorUpdates.delete(socketId);
+      }
+    }
     this.excalidrawAPI.updateScene({ collaborators });
 
     // unfollow if the followed user left the room
@@ -1224,17 +1247,43 @@ class Collab extends PureComponent<CollabProps, CollabState> {
   }
 
   updateCollaborator = (socketId: SocketId, updates: Partial<Collaborator>) => {
-    const isCurrentUser = socketId === this.portal.socket?.id;
-    const collaborators = new Map(this.collaborators);
-    const user: Mutable<Collaborator> = Object.assign(
-      // we never receive our own broadcasts, so we need to seed
-      // our own collaborator entry with the local username
-      isCurrentUser ? { username: this.state.username } : {},
-      collaborators.get(socketId),
-      updates,
-      { isCurrentUser },
+    const pending = this.pendingCollaboratorUpdates.get(socketId);
+    this.pendingCollaboratorUpdates.set(socketId, {
+      ...pending,
+      ...updates,
+    });
+    this.scheduleCollaboratorUpdate();
+  };
+
+  private scheduleCollaboratorUpdate = () => {
+    if (this.collaboratorUpdateFrame != null) {
+      return;
+    }
+    this.collaboratorUpdateFrame = window.requestAnimationFrame(
+      this.flushCollaboratorUpdates,
     );
-    collaborators.set(socketId, user);
+  };
+
+  private flushCollaboratorUpdates = () => {
+    this.collaboratorUpdateFrame = null;
+    if (this.pendingCollaboratorUpdates.size === 0) {
+      return;
+    }
+
+    const collaborators = new Map(this.collaborators);
+    for (const [socketId, updates] of this.pendingCollaboratorUpdates) {
+      const isCurrentUser = socketId === this.portal.socket?.id;
+      const user: Mutable<Collaborator> = Object.assign(
+        // we never receive our own broadcasts, so we need to seed
+        // our own collaborator entry with the local username
+        isCurrentUser ? { username: this.state.username } : {},
+        collaborators.get(socketId),
+        updates,
+        { isCurrentUser },
+      );
+      collaborators.set(socketId, user);
+    }
+    this.pendingCollaboratorUpdates.clear();
     this.collaborators = collaborators;
 
     this.excalidrawAPI.updateScene({

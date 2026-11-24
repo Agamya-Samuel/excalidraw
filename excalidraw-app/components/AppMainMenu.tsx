@@ -19,6 +19,7 @@ import {
   authDialogOpenAtom,
   authStatusAtom,
   authUserAtom,
+  nameDialogOpenAtom,
 } from "../auth/authAtoms";
 import { navigate } from "../cloud/routes";
 import { isCloudEnabled } from "../lib/api";
@@ -36,6 +37,7 @@ export const AppMainMenu: React.FC<{
   const user = useAtomValue(authUserAtom);
   const authStatus = useAtomValue(authStatusAtom);
   const setAuthDialogOpen = useSetAtom(authDialogOpenAtom);
+  const setNameDialogOpen = useSetAtom(nameDialogOpenAtom);
 
   const handleSignOut = async () => {
     try {
@@ -75,6 +77,9 @@ export const AppMainMenu: React.FC<{
       {isCloudEnabled() ? (
         authStatus === "loading" ? null : user ? (
           <>
+            <MainMenu.Item onSelect={() => setNameDialogOpen(true)}>
+              Profile name
+            </MainMenu.Item>
             <MainMenu.Item
               icon={loginIcon}
               onSelect={() => navigate("/dashboard")}
@@ -84,13 +89,18 @@ export const AppMainMenu: React.FC<{
             <MainMenu.Item onSelect={handleSignOut}>Sign out</MainMenu.Item>
           </>
         ) : (
-          <MainMenu.Item
-            icon={loginIcon}
-            onSelect={() => setAuthDialogOpen(true)}
-            className="highlighted"
-          >
-            {t("labels.signIn")}
-          </MainMenu.Item>
+          <>
+            <MainMenu.Item
+              icon={loginIcon}
+              onSelect={() => setAuthDialogOpen(true)}
+              className="highlighted"
+            >
+              {t("labels.signIn")}
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={() => setNameDialogOpen(true)}>
+              Your name
+            </MainMenu.Item>
+          </>
         )
       ) : (
         <MainMenu.ItemLink

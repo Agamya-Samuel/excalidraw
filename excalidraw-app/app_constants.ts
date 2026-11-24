@@ -3,7 +3,7 @@ export const SAVE_TO_LOCAL_STORAGE_TIMEOUT = 300;
 export const INITIAL_SCENE_UPDATE_TIMEOUT = 5000;
 export const FILE_UPLOAD_TIMEOUT = 300;
 export const LOAD_IMAGES_TIMEOUT = 500;
-export const SYNC_FULL_SCENE_INTERVAL_MS = 20000;
+export const SYNC_FULL_SCENE_INTERVAL_MS = 60000;
 /** save a cloud board once edits pause for this long */
 export const CLOUD_DOC_SAVE_DEBOUNCE_MS = 1200;
 /** ...but never wait longer than this during continuous drawing */

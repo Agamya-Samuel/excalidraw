@@ -35,6 +35,11 @@ class Portal {
   }
 
   open(socket: Socket, id: string, key: string) {
+    // A Portal must own at most one socket. Close any previous one so a
+    // re-init cannot leave a zombie connection in the room.
+    if (this.socket) {
+      this.close();
+    }
     this.socket = socket;
     this.roomId = id;
     this.roomKey = key;

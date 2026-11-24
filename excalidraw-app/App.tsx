@@ -107,6 +107,7 @@ import { LoadingOverlay } from "./components/LoadingOverlay";
 import { ThemeScope } from "./components/ThemeScope";
 import { AuthProvider } from "./auth/AuthProvider";
 import { AuthDialog } from "./auth/components/AuthDialog";
+import { NameDialog } from "./auth/components/NameDialog";
 import { authStatusAtom, authUserAtom } from "./auth/authAtoms";
 import { activeDocAtom, pendingDraftAtom } from "./cloud/cloudAtoms";
 import { Dashboard } from "./cloud/components/Dashboard";
@@ -671,6 +672,7 @@ const ExcalidrawWrapper = () => {
     return () => {
       appJotaiStore.set(activeDocAtom, null);
       appJotaiStore.set(pendingDraftAtom, null);
+      appJotaiStore.set(collabAPIAtom, null);
     };
   }, []);
 
@@ -1618,6 +1620,7 @@ const ExcalidrawAppRoutes = () => {
         <ExcalidrawWrapper />
       )}
       <AuthDialog />
+      <NameDialog />
     </ExcalidrawAPIProvider>
   );
 };

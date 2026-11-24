@@ -1,23 +1,98 @@
+x-server: &server
+  build:
+    context: .
+    dockerfile: server/Dockerfile
+  image: excalidraw-server:local
+  restart: unless-stopped
+
 services:
-  excalidraw:
+  web:
     build:
       context: .
+      dockerfile: Dockerfile
       args:
-        - NODE_ENV=development
-    container_name: excalidraw
+        VITE_APP_CLOUD_ENABLED: "true"
+        VITE_APP_WS_SERVER_URL: ""
+    container_name: excalidraw-web
     ports:
-      - "3000:80"
-    restart: on-failure
-    stdin_open: true
-    healthcheck:
-      disable: true
+      - "8080:80"
+    depends_on:
+      - api
+      - room
+    restart: unless-stopped
+
+  api:
+    <<: *server
+    container_name: excalidraw-api
+    command: ["node", "dist/api.js"]
     environment:
-      - NODE_ENV=development
+      NODE_ENV: production
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-excalidraw}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-excalidraw}
+      APP_ORIGIN: ${APP_ORIGIN:?set APP_ORIGIN}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      OWNER_EMAIL: ${OWNER_EMAIL:?set OWNER_EMAIL}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:?set OWNER_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      UPLOAD_DIR: /data/uploads
+      MAX_SCENE_BYTES: ${MAX_SCENE_BYTES:-16777216}
+      MAX_FILE_BYTES: ${MAX_FILE_BYTES:-8388608}
     volumes:
-      - ./:/opt/node_app/app:delegated
-      - ./package.json:/opt/node_app/package.json
-      - ./yarn.lock:/opt/node_app/yarn.lock
-      - notused:/opt/node_app/app/node_modules
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  room:
+    <<: *server
+    container_name: excalidraw-room-relay
+    command: ["node", "dist/room.js"]
+    environment:
+      NODE_ENV: production
+      ROOM_PORT: "3002"
+      MAX_FILE_BYTES: ${MAX_FILE_BYTES:-8388608}
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    container_name: excalidraw-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-excalidraw}
+      POSTGRES_USER: ${POSTGRES_USER:-excalidraw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-excalidraw} -d ${POSTGRES_DB:-excalidraw}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
 
 volumes:
-  notused:
+  pgdata: {}
+  uploads: {}

@@ -4,11 +4,14 @@
 !.eslintrc.json
 !.npmrc
 !.prettierrc
+!.yarnrc.yml
+!examples/
 !excalidraw-app/
 !package.json
 !public/
 !packages/
 !scripts/
+!server/
 !tsconfig.json
 !yarn.lock
 

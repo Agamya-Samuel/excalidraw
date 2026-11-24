@@ -11,6 +11,12 @@ RUN --mount=type=cache,target=/root/.yarn/berry/cache \
     npm_config_target_arch=${TARGETARCH} yarn install --immutable
 
 ARG NODE_ENV=production
+# Vite inlines VITE_* variables at build time. Defaults live in .env.production;
+# these args allow overriding the same-origin/socket/cloud flags without editing files.
+ARG VITE_APP_CLOUD_ENABLED=true
+ARG VITE_APP_WS_SERVER_URL=
+ENV VITE_APP_CLOUD_ENABLED=${VITE_APP_CLOUD_ENABLED}
+ENV VITE_APP_WS_SERVER_URL=${VITE_APP_WS_SERVER_URL}
 
 RUN npm_config_target_arch=${TARGETARCH} yarn build:app:docker
 

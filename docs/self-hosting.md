@@ -9,7 +9,7 @@ This fork replaces Supabase with a self-contained stack:
 | `room` | Socket.IO relay for live editing and cursors |
 | `db` | Postgres 17 |
 
-Only `web` is published (host port `8080` by default). Terminate TLS in front of it (Dokploy/Traefik/Caddy) and point your domain at it. **HTTPS is required** for collaboration because the browser needs `crypto.subtle` (secure context).
+Only `web` is published (host port `8080` by default). The container serves HTTP on **both 80 and 3000**, so Dokploy/Traefik works whether the domain port is set to 80 or 3000. Terminate TLS in front of it (Dokploy/Traefik/Caddy) and point your domain at it. **HTTPS is required** for collaboration because the browser needs `crypto.subtle` (secure context).
 
 ## Images
 

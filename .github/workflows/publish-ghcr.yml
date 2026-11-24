@@ -57,7 +57,7 @@ jobs:
           push: true
           build-args: |
             VITE_APP_CLOUD_ENABLED=true
-            VITE_APP_WS_SERVER_URL=${{ vars.VITE_APP_WS_SERVER_URL }}
+            VITE_APP_WS_SERVER_URL=${{ steps.wsurl.outputs.url }}
           tags: |
             ghcr.io/${{ needs.meta.outputs.owner }}/excalidraw-web:latest
             ghcr.io/${{ needs.meta.outputs.owner }}/excalidraw-web:sha-${{ needs.meta.outputs.sha }}

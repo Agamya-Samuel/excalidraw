@@ -21,7 +21,7 @@ import {
   authUserAtom,
 } from "../auth/authAtoms";
 import { navigate } from "../cloud/routes";
-import { isCloudEnabled } from "../lib/supabase";
+import { isCloudEnabled } from "../lib/api";
 
 import { saveDebugState } from "./DebugCanvas";
 

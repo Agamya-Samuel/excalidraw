@@ -10,7 +10,7 @@ import {
   cloudConnectionStatusAtom,
   cloudSaveStatusAtom,
 } from "../cloud/cloudAtoms";
-import { isCloudEnabled } from "../lib/supabase";
+import { isCloudEnabled } from "../lib/api";
 
 import { DebugFooter, isVisualDebuggerEnabled } from "./DebugCanvas";
 import { EncryptedIcon } from "./EncryptedIcon";

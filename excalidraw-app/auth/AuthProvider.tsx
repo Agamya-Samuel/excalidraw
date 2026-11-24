@@ -1,9 +1,11 @@
 import React, { useEffect } from "react";
 
-import { useSetAtom } from "../app-jotai";
-import { getSupabase, isCloudEnabled } from "../lib/supabase";
+import { appJotaiStore, useSetAtom } from "../app-jotai";
+import { apiFetch, isCloudEnabled } from "../lib/api";
 
 import { authStatusAtom, authUserAtom } from "./authAtoms";
+
+import type { AuthUser } from "../lib/api";
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -17,25 +19,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
 
-    const supabase = getSupabase();
     let active = true;
 
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) {
-        return;
-      }
-      setUser(data.session?.user ?? null);
-      setStatus(data.session?.user ? "authenticated" : "unauthenticated");
-    });
-
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setStatus(session?.user ? "authenticated" : "unauthenticated");
-    });
+    apiFetch<AuthUser>("/auth/me")
+      .then((user) => {
+        if (!active) {
+          return;
+        }
+        setUser(user);
+        setStatus("authenticated");
+      })
+      .catch(() => {
+        if (!active) {
+          return;
+        }
+        setUser(null);
+        setStatus("unauthenticated");
+      });
 
     return () => {
       active = false;
-      data.subscription.unsubscribe();
     };
   }, [setStatus, setUser]);
 
@@ -43,56 +46,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 };
 
 export const signInWithEmail = async (email: string, password: string) => {
-  const { error } = await getSupabase().auth.signInWithPassword({
-    email,
-    password,
+  const user = await apiFetch<AuthUser>("/auth/login", {
+    method: "POST",
+    json: { email, password },
   });
-  if (error) {
-    throw error;
-  }
+  appJotaiStore.set(authUserAtom, user);
+  appJotaiStore.set(authStatusAtom, "authenticated");
+  return user;
 };
 
-export const signUpWithEmail = async (email: string, password: string) => {
-  const { data, error } = await getSupabase().auth.signUp({
-    email,
-    password,
-    options: { emailRedirectTo: window.location.origin },
+export const sendMagicLink = async (email: string) => {
+  await apiFetch<{ ok: boolean }>("/auth/magic-link", {
+    method: "POST",
+    json: { email },
   });
-  if (error) {
-    throw error;
-  }
-  return data;
-};
-
-export const sendPasswordReset = async (email: string) => {
-  const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
-    redirectTo: window.location.origin,
-  });
-  if (error) {
-    throw error;
-  }
-};
-
-export const resendConfirmationEmail = async (email: string) => {
-  const { error } = await getSupabase().auth.resend({ type: "signup", email });
-  if (error) {
-    throw error;
-  }
 };
 
 export const signInWithOAuth = async (provider: "google" | "github") => {
-  const { error } = await getSupabase().auth.signInWithOAuth({
-    provider,
-    options: { redirectTo: window.location.origin },
-  });
-  if (error) {
-    throw error;
-  }
+  window.location.assign(`/api/auth/oauth/${provider}`);
 };
 
 export const signOut = async () => {
-  const { error } = await getSupabase().auth.signOut();
-  if (error) {
-    throw error;
-  }
+  await apiFetch("/auth/logout", { method: "POST" });
+  appJotaiStore.set(authUserAtom, null);
+  appJotaiStore.set(authStatusAtom, "unauthenticated");
 };

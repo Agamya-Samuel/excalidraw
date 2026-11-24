@@ -11,16 +11,53 @@ This fork replaces Supabase with a self-contained stack:
 
 Only `web` is published (host port `8080` by default). Terminate TLS in front of it (Dokploy/Traefik/Caddy) and point your domain at it. **HTTPS is required** for collaboration because the browser needs `crypto.subtle` (secure context).
 
+## Images
+
+Deployment uses prebuilt images from GitHub Container Registry; nothing is built on the server.
+
+| Image | Used by |
+| --- | --- |
+| `ghcr.io/agamya-samuel/excalidraw-web` | `web` |
+| `ghcr.io/agamya-samuel/excalidraw-server` | `api` and `room` (same image, different command) |
+
+`.github/workflows/publish-ghcr.yml` builds and pushes both on every push to `feat/cloud-workspace` (or via manual dispatch), tagging:
+
+- `latest`
+- `sha-<short>` for immutable deploys
+
+One-time setup after the first run:
+
+1. If the packages are private, either open **GitHub → Packages → package → Settings → Change visibility → Public**, or add GHCR registry credentials to Dokploy.
+2. If Actions cannot push, enable **Settings → Actions → General → Workflow permissions → Read and write**.
+
+Pin a version with `IMAGE_TAG` (see `.env.example`):
+
+```env
+IMAGE_TAG=latest          # or sha-1a2b3c4
+```
+
 ## Quick start
 
 ```sh
 cp .env.example .env
 # edit .env: APP_ORIGIN, POSTGRES_PASSWORD, SESSION_SECRET, OWNER_EMAIL, OWNER_PASSWORD
 
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open `APP_ORIGIN`, sign in with `OWNER_EMAIL` / `OWNER_PASSWORD`.
+
+To build the images locally instead of pulling them:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+## Deploying a change
+
+1. Push to `feat/cloud-workspace`.
+2. Wait for **Publish GHCR images** to finish.
+3. Redeploy the Compose service in Dokploy. With `IMAGE_TAG=latest`, it pulls the new images; with a SHA tag, bump it first.
 
 ## Accounts
 

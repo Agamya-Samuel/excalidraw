@@ -1,0 +1,30 @@
+# Local build override. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Deployment uses the GHCR images from docker-compose.yml; this file is for
+# developing/testing images without publishing them.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_APP_CLOUD_ENABLED: "true"
+        VITE_APP_WS_SERVER_URL: ""
+    image: excalidraw-web:local
+    pull_policy: never
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: excalidraw-server:local
+    pull_policy: never
+
+  room:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: excalidraw-server:local
+    pull_policy: never

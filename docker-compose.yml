@@ -1,18 +1,19 @@
+# Deployment stack. Images are published to GHCR by
+# .github/workflows/publish-ghcr.yml on pushes to feat/cloud-workspace.
+#
+# IMAGE_TAG defaults to `latest`; pin a `sha-<short>` tag for immutable deploys.
+# For local builds use the override:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+
 x-server: &server
-  build:
-    context: .
-    dockerfile: server/Dockerfile
-  image: excalidraw-server:local
+  image: ghcr.io/agamya-samuel/excalidraw-server:${IMAGE_TAG:-latest}
+  pull_policy: always
   restart: unless-stopped
 
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VITE_APP_CLOUD_ENABLED: "true"
-        VITE_APP_WS_SERVER_URL: ""
+    image: ghcr.io/agamya-samuel/excalidraw-web:${IMAGE_TAG:-latest}
+    pull_policy: always
     container_name: excalidraw-web
     ports:
       - "8080:80"

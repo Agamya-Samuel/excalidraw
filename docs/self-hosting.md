@@ -61,33 +61,20 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 ## Realtime WebSocket (optional direct path)
 
-Cloudflare can add latency to WebSocket traffic. For a lower-latency realtime path:
+Cloudflare can add latency to WebSocket traffic. To bypass it for realtime:
 
-1. In Cloudflare DNS, add a **DNS-only (grey-cloud)** `A` record:
+1. Cloudflare DNS: add a **DNS-only (grey-cloud)** `A` record:
    - `ws.<your-domain>` → the origin IP.
-2. On the origin, add a Traefik file-provider route `/etc/dokploy/traefik/dynamic/ws.yml`:
-   ```yaml
-   http:
-     routers:
-       ws-excalidraw:
-         rule: "Host(`ws.<your-domain>`)"
-         entryPoints: [websecure]
-         service: ws-excalidraw
-         tls:
-           certResolver: letsencrypt
-       ws-excalidraw-http:
-         rule: "Host(`ws.<your-domain>`)"
-         entryPoints: [web]
-         middlewares: [redirect-to-https@file]
-         service: ws-excalidraw
-     services:
-       ws-excalidraw:
-         loadBalancer:
-           servers:
-             - url: "http://web:80"
-   ```
+2. Dokploy → application → **Domains** → add:
+   - Service: `web`
+   - Host: `ws.<your-domain>`
+   - Path: `/`
+   - Container port: `80`
+   - HTTPS: enabled, certificate provider: Let's Encrypt
+   - “Behind Cloudflare”: disabled
 3. Set the GitHub Actions repository variable `VITE_APP_WS_SERVER_URL` to `https://ws.<your-domain>` (Settings → Secrets and variables → Actions → Variables). The publish workflow passes it to the web build; no URL is hardcoded in the repo.
-4. The main site can stay proxied through Cloudflare; only the socket connects directly to the origin.
+4. Run **Publish GHCR images** (or push) so the web image is built with that value, then redeploy.
+5. The main site can stay proxied through Cloudflare; only the socket connects directly to the origin. Dokploy recreates the ws route and certificate on every deployment; no host-local Traefik file is needed.
 
 ## Accounts
 

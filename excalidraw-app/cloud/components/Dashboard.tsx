@@ -10,7 +10,7 @@ import type { AppState } from "@excalidraw/excalidraw/types";
 
 import { FILE_UPLOAD_MAX_BYTES } from "../../app_constants";
 import { useAtomValue, useSetAtom } from "../../app-jotai";
-import { signOut } from "../../auth/AuthProvider";
+import { signOut, updateDisplayName } from "../../auth/AuthProvider";
 import {
   authDialogOpenAtom,
   authStatusAtom,
@@ -20,7 +20,10 @@ import { ThemeScope } from "../../components/ThemeScope";
 import { getSyncableElements } from "../../data";
 import { encodeFilesForUpload } from "../../data/FileManager";
 import { LocalData } from "../../data/LocalData";
-import { importFromLocalStorage } from "../../data/localStorage";
+import {
+  importFromLocalStorage,
+  saveUsernameToLocalStorage,
+} from "../../data/localStorage";
 import { saveFiles } from "../../data/remote";
 import { deleteCloudDraft } from "../draftStore";
 import { useDashboardRealtime } from "../hooks/useDashboardRealtime";
@@ -55,6 +58,16 @@ const errorStyle: React.CSSProperties = {
 
 const IMPORT_DISMISSED_KEY = "excalidraw-cloud-import-dismissed";
 
+const nameLinkStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  marginLeft: "0.35rem",
+  color: "var(--link-color, #6965db)",
+  cursor: "pointer",
+  fontSize: "inherit",
+};
+
 export const Dashboard = () => {
   const user = useAtomValue(authUserAtom);
   const authStatus = useAtomValue(authStatusAtom);
@@ -64,6 +77,10 @@ export const Dashboard = () => {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState("");
+  const [nameBusy, setNameBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const [inviteBusy, setInviteBusy] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [localScene, setLocalScene] = useState<ReturnType<
@@ -158,6 +175,25 @@ export const Dashboard = () => {
       navigate("/");
     } finally {
       setSigningOut(false);
+    }
+  };
+
+  const saveName = async () => {
+    if (nameBusy) {
+      return;
+    }
+    setNameBusy(true);
+    setProfileError("");
+    try {
+      const updated = await updateDisplayName(nameValue.trim() || null);
+      if (updated.displayName) {
+        saveUsernameToLocalStorage(updated.displayName);
+      }
+      setEditingName(false);
+    } catch (err: any) {
+      setProfileError(err?.message || "Could not update your name");
+    } finally {
+      setNameBusy(false);
     }
   };
 
@@ -357,7 +393,65 @@ export const Dashboard = () => {
       >
         <div>
           <h1 style={{ margin: 0 }}>Cloud boards</h1>
-          <small style={{ opacity: 0.7 }}>{user.email}</small>
+          {editingName ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-end",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+                marginTop: "0.4rem",
+              }}
+            >
+              <div style={{ minWidth: 220 }}>
+                <TextField
+                  label="Your name"
+                  value={nameValue}
+                  onChange={setNameValue}
+                  disabled={nameBusy}
+                  autoFocus
+                  fullWidth
+                  onKeyDown={(event) => event.key === KEYS.ENTER && saveName()}
+                />
+              </div>
+              <FilledButton
+                label="Save"
+                status={nameBusy ? "loading" : null}
+                disabled={nameBusy}
+                onClick={saveName}
+              />
+              <FilledButton
+                variant="outlined"
+                color="muted"
+                label="Cancel"
+                disabled={nameBusy}
+                onClick={() => {
+                  setEditingName(false);
+                  setProfileError("");
+                }}
+              />
+            </div>
+          ) : (
+            <small style={{ opacity: 0.7 }}>
+              {user.email}
+              <button
+                type="button"
+                style={nameLinkStyle}
+                onClick={() => {
+                  setNameValue(user.displayName ?? "");
+                  setEditingName(true);
+                  setProfileError("");
+                }}
+              >
+                {user.displayName
+                  ? `· ${user.displayName} (edit)`
+                  : "· Set your name"}
+              </button>
+            </small>
+          )}
+          {profileError && (
+            <p style={{ ...errorStyle, marginTop: "0.5rem" }}>{profileError}</p>
+          )}
         </div>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <FilledButton

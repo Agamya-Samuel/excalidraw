@@ -4,6 +4,7 @@ import { verifyPassword } from "../crypto";
 import { query } from "../db";
 import { env, isSecureOrigin } from "../env";
 import { HttpError } from "../errors";
+import { requireUser } from "../guards";
 
 import {
   createAuthToken,
@@ -30,6 +31,10 @@ const credentialsSchema = z.object({
 
 const magicLinkSchema = z.object({
   email: z.string().email(),
+});
+
+const displayNameSchema = z.object({
+  displayName: z.string().max(80).nullable(),
 });
 
 const userResponse = (user: AuthUser) => ({
@@ -111,6 +116,33 @@ export const registerAuthRoutes = (app: FastifyInstance) => {
       return reply.code(401).send({ error: "Not signed in" });
     }
     return userResponse(req.authUser);
+  });
+
+  app.patch("/auth/me", async (req) => {
+    const user = requireUser(req);
+    const body = displayNameSchema.parse(req.body);
+    const displayName = body.displayName?.trim() || null;
+
+    const { rows } = await query<{
+      id: string;
+      email: string;
+      display_name: string | null;
+      avatar_url: string | null;
+      is_owner: boolean;
+    }>(
+      `update users set display_name = $2 where id = $1
+       returning id, email, display_name, avatar_url, is_owner`,
+      [user.id, displayName],
+    );
+
+    const row = rows[0];
+    return userResponse({
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      isOwner: row.is_owner,
+    });
   });
 
   app.post(

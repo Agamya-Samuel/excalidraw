@@ -1,11 +1,19 @@
 import React, { useEffect } from "react";
 
 import { appJotaiStore, useSetAtom } from "../app-jotai";
+import { saveUsernameToLocalStorage } from "../data/localStorage";
 import { apiFetch, isCloudEnabled } from "../lib/api";
 
 import { authStatusAtom, authUserAtom } from "./authAtoms";
 
 import type { AuthUser } from "../lib/api";
+
+const syncCollabUsername = (user: AuthUser) => {
+  // Keep the live-collaboration name in sync with the profile name.
+  if (user.displayName) {
+    saveUsernameToLocalStorage(user.displayName);
+  }
+};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -28,6 +36,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         }
         setUser(user);
         setStatus("authenticated");
+        syncCollabUsername(user);
       })
       .catch(() => {
         if (!active) {
@@ -52,6 +61,17 @@ export const signInWithEmail = async (email: string, password: string) => {
   });
   appJotaiStore.set(authUserAtom, user);
   appJotaiStore.set(authStatusAtom, "authenticated");
+  syncCollabUsername(user);
+  return user;
+};
+
+export const updateDisplayName = async (displayName: string | null) => {
+  const user = await apiFetch<AuthUser>("/auth/me", {
+    method: "PATCH",
+    json: { displayName },
+  });
+  appJotaiStore.set(authUserAtom, user);
+  syncCollabUsername(user);
   return user;
 };
 

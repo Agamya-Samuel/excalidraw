@@ -1,9 +1,6 @@
-import { generateEncryptionKey } from "@excalidraw/excalidraw/data/encryption";
-
 import type { AppState } from "@excalidraw/excalidraw/types";
 
-import { generateRoomId } from "../data";
-import { getSupabase, STORAGE_BUCKET } from "../lib/supabase";
+import { ApiError, apiFetch } from "../lib/api";
 
 import { saveDocScene } from "./docScene";
 
@@ -38,14 +35,6 @@ export type DocInvite = {
   created_at: string;
 };
 
-const requireUser = async () => {
-  const { data, error } = await getSupabase().auth.getUser();
-  if (error || !data.user) {
-    throw new Error("Not signed in");
-  }
-  return data.user;
-};
-
 export const createDocument = async ({
   title,
   elements,
@@ -55,203 +44,91 @@ export const createDocument = async ({
   elements: readonly SyncableExcalidrawElement[];
   appState: AppState;
 }): Promise<CloudDoc> => {
-  const user = await requireUser();
-  const roomId = await generateRoomId();
-  const roomKey = await generateEncryptionKey();
-
-  if (!roomKey) {
-    throw new Error("Could not generate document key");
-  }
-
-  const { data, error } = await getSupabase()
-    .from("documents")
-    .insert({
-      owner_id: user.id,
-      owner_email: (user.email ?? "").toLowerCase(),
-      title: title.trim() || "Untitled",
-      room_id: roomId,
-      room_key: roomKey,
-    })
-    .select("*")
-    .single();
-
-  if (error) {
-    throw error;
-  }
+  const doc = await apiFetch<CloudDoc>("/documents", {
+    method: "POST",
+    json: { title: title.trim() || "Untitled" },
+  });
 
   try {
     await saveDocScene({
-      docId: data.id,
-      roomKey,
+      docId: doc.id,
+      roomKey: doc.room_key,
       elements,
       appState,
+      baseVersion: null,
     });
   } catch (error) {
-    // don't leave a half-created board behind
-    await getSupabase().from("documents").delete().eq("id", data.id);
+    await apiFetch(`/documents/${doc.id}`, { method: "DELETE" }).catch(() => {
+      // best effort cleanup
+    });
     throw error;
   }
 
-  return data as CloudDoc;
+  return doc;
 };
 
 export const listDocuments = async (): Promise<CloudDocWithRole[]> => {
-  const user = await requireUser();
-  const supabase = getSupabase();
-
-  const [owned, shared] = await Promise.all([
-    supabase.from("documents").select("*").eq("owner_id", user.id),
-    supabase
-      .from("doc_members")
-      .select("role, documents(*)")
-      .eq("user_id", user.id),
-  ]);
-
-  if (owned.error) {
-    throw owned.error;
-  }
-  if (shared.error) {
-    throw shared.error;
-  }
-
-  const docs = new Map<string, CloudDocWithRole>();
-
-  for (const doc of (owned.data ?? []) as CloudDoc[]) {
-    docs.set(doc.id, { ...doc, role: "owner" });
-  }
-
-  for (const row of (shared.data ?? []) as any[]) {
-    const doc = row.documents as CloudDoc | null;
-    if (doc && !docs.has(doc.id)) {
-      docs.set(doc.id, { ...doc, role: row.role });
-    }
-  }
-
-  return [...docs.values()].sort((a, b) =>
-    b.updated_at.localeCompare(a.updated_at),
-  );
+  return apiFetch<CloudDocWithRole[]>("/documents");
 };
 
 export const getDocument = async (
   docId: string,
 ): Promise<CloudDocWithRole | null> => {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("documents")
-    .select("*")
-    .eq("id", docId)
-    .maybeSingle();
-
-  if (error) {
+  try {
+    return await apiFetch<CloudDocWithRole>(`/documents/${docId}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
     throw error;
   }
-
-  if (!data) {
-    return null;
-  }
-
-  const user = (await supabase.auth.getUser()).data.user;
-  let role: DocRole | null = user && data.owner_id === user.id ? "owner" : null;
-
-  if (!role && user) {
-    const { data: member } = await supabase
-      .from("doc_members")
-      .select("role")
-      .eq("doc_id", docId)
-      .eq("user_id", user.id)
-      .maybeSingle();
-    role = (member?.role as DocRole) ?? null;
-  }
-
-  return role ? { ...(data as CloudDoc), role } : null;
 };
 
 export const getPublicDoc = async (docId: string) => {
-  const { data, error } = await getSupabase().rpc("get_public_doc", {
-    p_doc: docId,
-  });
-
-  if (error) {
+  try {
+    return await apiFetch<{
+      id: string;
+      title: string;
+      scene_version: number;
+      updated_at: string;
+      room_id: string;
+      public_edit: boolean;
+    }>(`/public/documents/${docId}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
     throw error;
   }
-
-  const row = Array.isArray(data) ? data[0] : data;
-  return row ?? null;
 };
 
 export const renameDocument = async (docId: string, title: string) => {
-  const { error } = await getSupabase()
-    .from("documents")
-    .update({
-      title: title.trim() || "Untitled",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", docId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}`, {
+    method: "PATCH",
+    json: { title: title.trim() || "Untitled" },
+  });
 };
 
 export const deleteDocument = async (docId: string) => {
-  const supabase = getSupabase();
-
-  const { data: objects } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .list(`docs/${docId}`);
-
-  if (objects?.length) {
-    await supabase.storage
-      .from(STORAGE_BUCKET)
-      .remove(objects.map((object) => `docs/${docId}/${object.name}`));
-  }
-
-  const { error } = await supabase.from("documents").delete().eq("id", docId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}`, { method: "DELETE" });
 };
 
 export type PublicAccess = "private" | "view" | "edit";
 
 export const setPublicAccess = async (docId: string, access: PublicAccess) => {
-  const { error } = await getSupabase()
-    .from("documents")
-    .update({
-      is_public: access !== "private",
-      public_edit: access === "edit",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", docId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}/access`, {
+    method: "PATCH",
+    json: { access },
+  });
 };
 
 export const listInvites = async (): Promise<
   (DocInvite & { title: string })[]
 > => {
-  const user = await requireUser();
-  const email = user.email?.toLowerCase();
-
-  if (!email) {
-    return [];
-  }
-
-  const { data, error } = await getSupabase()
-    .from("doc_invites")
-    .select("*")
-    .eq("email", email);
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []).map((row: any) => ({
-    ...row,
-    title: row.doc_title ?? "Untitled",
+  const invites = await apiFetch<DocInvite[]>("/doc-invites");
+  return invites.map((invite) => ({
+    ...invite,
+    title: invite.doc_title ?? "Untitled",
   }));
 };
 
@@ -261,118 +138,44 @@ export const inviteMember = async (
   role: Exclude<DocRole, "owner">,
   docTitle: string,
 ) => {
-  const user = await requireUser();
-
-  const { error } = await getSupabase().from("doc_invites").upsert(
-    {
-      doc_id: docId,
-      doc_title: docTitle,
-      email: email.trim().toLowerCase(),
-      role,
-      invited_by: user.id,
-    },
-    { onConflict: "doc_id,email" },
-  );
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}/invites`, {
+    method: "POST",
+    json: { email: email.trim().toLowerCase(), role, docTitle },
+  });
 };
 
 export const acceptInvite = async (invite: DocInvite) => {
-  const user = await requireUser();
-  const email = user.email?.toLowerCase() ?? "";
-
-  const { error } = await getSupabase().from("doc_members").insert({
-    doc_id: invite.doc_id,
-    user_id: user.id,
-    email,
-    role: invite.role,
-  });
-
-  if (error && error.code !== "23505") {
-    throw error;
-  }
-
-  await getSupabase().from("doc_invites").delete().eq("id", invite.id);
+  await apiFetch(`/doc-invites/${invite.id}/accept`, { method: "POST" });
 };
 
 export const acceptInviteById = async (inviteId: string) => {
-  const { data, error } = await getSupabase()
-    .from("doc_invites")
-    .select("*")
-    .eq("id", inviteId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  if (data) {
-    await acceptInvite(data as DocInvite);
-  }
+  await apiFetch(`/doc-invites/${inviteId}/accept`, { method: "POST" });
 };
 
 export const declineInvite = async (inviteId: string) => {
-  const { error } = await getSupabase()
-    .from("doc_invites")
-    .delete()
-    .eq("id", inviteId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/doc-invites/${inviteId}`, { method: "DELETE" });
 };
 
 export const listMembers = async (docId: string) => {
-  const { data, error } = await getSupabase()
-    .from("doc_members")
-    .select("user_id, email, role")
-    .eq("doc_id", docId);
-
-  if (error) {
-    throw error;
-  }
-
-  return data ?? [];
+  return apiFetch<{ user_id: string; email: string; role: string }[]>(
+    `/documents/${docId}/members`,
+  );
 };
 
 export const listDocInvites = async (docId: string): Promise<DocInvite[]> => {
-  const { data, error } = await getSupabase()
-    .from("doc_invites")
-    .select("*")
-    .eq("doc_id", docId)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []) as DocInvite[];
+  return apiFetch<DocInvite[]>(`/documents/${docId}/invites`);
 };
 
 export const revokeInvite = async (docId: string, inviteId: string) => {
-  const { error } = await getSupabase()
-    .from("doc_invites")
-    .delete()
-    .eq("id", inviteId)
-    .eq("doc_id", docId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}/invites/${inviteId}`, {
+    method: "DELETE",
+  });
 };
 
 export const removeMember = async (docId: string, userId: string) => {
-  const { error } = await getSupabase()
-    .from("doc_members")
-    .delete()
-    .eq("doc_id", docId)
-    .eq("user_id", userId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}/members/${userId}`, {
+    method: "DELETE",
+  });
 };
 
 export const setMemberRole = async (
@@ -380,47 +183,18 @@ export const setMemberRole = async (
   userId: string,
   role: Exclude<DocRole, "owner">,
 ) => {
-  const { error } = await getSupabase()
-    .from("doc_members")
-    .update({ role })
-    .eq("doc_id", docId)
-    .eq("user_id", userId);
-
-  if (error) {
-    throw error;
-  }
+  await apiFetch(`/documents/${docId}/members/${userId}`, {
+    method: "PATCH",
+    json: { role },
+  });
 };
 
 export const uploadThumbnail = async (docId: string, png: Blob) => {
-  const path = `docs/${docId}/thumb.png`;
-  const supabase = getSupabase();
-
-  const { error } = await supabase.storage
-    .from(STORAGE_BUCKET)
-    .upload(path, png, {
-      contentType: "image/png",
-      cacheControl: "3600",
-      upsert: true,
-    });
-
-  if (error) {
-    throw error;
-  }
-
-  const { error: rpcError } = await supabase.rpc("set_doc_thumbnail", {
-    p_doc: docId,
-    p_path: path,
+  await apiFetch(`/documents/${docId}/thumbnail`, {
+    method: "PUT",
+    body: png,
+    headers: { "content-type": "image/png" },
   });
-
-  if (rpcError) {
-    throw rpcError;
-  }
 };
 
-export const getThumbnailUrl = async (path: string) => {
-  const { data } = await getSupabase()
-    .storage.from(STORAGE_BUCKET)
-    .createSignedUrl(path, 3600);
-
-  return data?.signedUrl ?? null;
-};
+export const getThumbnailUrl = async (path: string) => `/api/files/${path}`;

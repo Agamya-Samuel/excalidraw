@@ -27,7 +27,7 @@ Object.defineProperty(window, "crypto", {
   },
 });
 
-vi.mock("../../excalidraw-app/data/supabase.ts", () => {
+vi.mock("../../excalidraw-app/data/remote.ts", () => {
   const loadScene = async () => null;
   const saveScene = () => {};
   const isSceneSaved = () => true;

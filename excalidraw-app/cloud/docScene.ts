@@ -10,9 +10,9 @@ import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconc
 
 import type { AppState } from "@excalidraw/excalidraw/types";
 
-import { getSyncableElements } from "../data";
+import { ApiError, apiFetch } from "../lib/api";
 import { base64ToBytes, bytesToBase64 } from "../lib/base64";
-import { getSupabase } from "../lib/supabase";
+import { getSyncableElements } from "../data";
 
 import type { SyncableExcalidrawElement } from "../data";
 
@@ -48,47 +48,41 @@ export const saveDocScene = async ({
   elements: readonly SyncableExcalidrawElement[];
   appState: AppState;
   /**
-   * Last version this client successfully persisted. When supplied, we try a
-   * single RPC without reading/decrypting the stored scene. The RPC rejects
-   * with 40001 if a peer saved in the meantime, and we fall back to
-   * read + reconcile + retry below.
+   * Last version this client successfully persisted. When supplied, try a
+   * single write without reading the stored scene. A 409 means a peer saved
+   * in the meantime, and we fall back to read + reconcile + retry.
    */
   baseVersion?: number | null;
 }) => {
-  const supabase = getSupabase();
-
   if (baseVersion != null) {
     const reconciled = getSyncableElements(elements);
-    const { error } = await supabase.rpc("save_doc_scene", {
-      p_doc: docId,
-      p_base_version: baseVersion,
-      p_scene_version: getSceneVersion(reconciled),
-      p_blob: await encryptScene(roomKey, reconciled),
-    });
-
-    if (!error) {
+    const sceneVersion = getSceneVersion(reconciled);
+    try {
+      await apiFetch(`/documents/${docId}/scene`, {
+        method: "PUT",
+        json: {
+          baseVersion,
+          sceneVersion,
+          blob: await encryptScene(roomKey, reconciled),
+        },
+      });
       return reconciled;
-    }
-
-    if (error.code !== "40001") {
-      throw error;
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 409)) {
+        throw error;
+      }
     }
   }
 
   for (let attempt = 0; attempt < MAX_SAVE_ATTEMPTS; attempt++) {
-    const { data: current, error } = await supabase
-      .from("doc_scenes")
-      .select("scene_version, blob")
-      .eq("doc_id", docId)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
+    const current = await apiFetch<{
+      blob: string | null;
+      sceneVersion: number;
+    }>(`/documents/${docId}/scene`);
 
     let reconciled = getSyncableElements(elements);
 
-    if (current) {
+    if (current.blob) {
       const prevStoredElements = getSyncableElements(
         restoreElements(await decryptScene(roomKey, current.blob), null),
       );
@@ -101,19 +95,20 @@ export const saveDocScene = async ({
       );
     }
 
-    const { error: rpcError } = await supabase.rpc("save_doc_scene", {
-      p_doc: docId,
-      p_base_version: current?.scene_version ?? 0,
-      p_scene_version: getSceneVersion(reconciled),
-      p_blob: await encryptScene(roomKey, reconciled),
-    });
-
-    if (!rpcError) {
+    try {
+      await apiFetch(`/documents/${docId}/scene`, {
+        method: "PUT",
+        json: {
+          baseVersion: current.sceneVersion,
+          sceneVersion: getSceneVersion(reconciled),
+          blob: await encryptScene(roomKey, reconciled),
+        },
+      });
       return reconciled;
-    }
-
-    if (rpcError.code !== "40001") {
-      throw rpcError;
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 409)) {
+        throw error;
+      }
     }
   }
 
@@ -127,58 +122,17 @@ export const loadDocScene = async ({
   docId: string;
   roomKey: string;
 }): Promise<readonly SyncableExcalidrawElement[] | null> => {
-  const { data, error } = await getSupabase()
-    .from("doc_scenes")
-    .select("blob")
-    .eq("doc_id", docId)
-    .maybeSingle();
+  const { blob } = await apiFetch<{ blob: string | null }>(
+    `/documents/${docId}/scene`,
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  if (!data) {
+  if (!blob) {
     return null;
   }
 
   return getSyncableElements(
-    restoreElements(await decryptScene(roomKey, data.blob), null, {
+    restoreElements(await decryptScene(roomKey, blob), null, {
       deleteInvisibleElements: true,
     }),
   );
-};
-
-export const subscribeDocScene = async (
-  docId: string,
-  roomKey: string,
-  onChange: (elements: readonly SyncableExcalidrawElement[]) => void,
-) => {
-  const supabase = getSupabase();
-
-  const channel = supabase
-    .channel(`doc-scene-${docId}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "doc_scene_meta",
-        filter: `doc_id=eq.${docId}`,
-      },
-      async () => {
-        try {
-          const elements = await loadDocScene({ docId, roomKey });
-          if (elements) {
-            onChange(elements);
-          }
-        } catch (error: any) {
-          console.error(error);
-        }
-      },
-    )
-    .subscribe();
-
-  return () => {
-    void supabase.removeChannel(channel);
-  };
 };

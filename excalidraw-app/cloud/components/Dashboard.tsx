@@ -21,7 +21,7 @@ import { getSyncableElements } from "../../data";
 import { encodeFilesForUpload } from "../../data/FileManager";
 import { LocalData } from "../../data/LocalData";
 import { importFromLocalStorage } from "../../data/localStorage";
-import { saveFiles } from "../../data/supabase";
+import { saveFiles } from "../../data/remote";
 import { deleteCloudDraft } from "../draftStore";
 import { useDashboardRealtime } from "../hooks/useDashboardRealtime";
 import { navigate } from "../routes";

@@ -37,7 +37,7 @@ import {
 } from "../app_constants";
 
 import { encodeFilesForUpload } from "./FileManager";
-import { saveFiles } from "./supabase";
+import { saveFiles } from "./remote";
 
 import type { WS_SUBTYPES } from "../app_constants";
 

@@ -117,14 +117,13 @@ import {
   isCloudDraftRedundant,
 } from "./cloud/draftStore";
 import { loadDocScene } from "./cloud/docScene";
-import { useCloudDocLiveSync } from "./cloud/hooks/useCloudDocLiveSync";
 import {
   getDocIdFromPath,
   getPublicViewData,
   isDashboardPath,
   navigate,
 } from "./cloud/routes";
-import { isCloudEnabled } from "./lib/supabase";
+import { isCloudEnabled } from "./lib/api";
 
 import {
   exportToBackend,
@@ -140,7 +139,7 @@ import {
   importUsernameFromLocalStorage,
 } from "./data/localStorage";
 
-import { loadFiles } from "./data/supabase";
+import { loadFiles } from "./data/remote";
 import {
   LibraryIndexedDBAdapter,
   LibraryLocalStorageMigrationAdapter,
@@ -451,10 +450,28 @@ const initializeScene = async (opts: {
           };
         }
 
-        const elements = await loadDocScene({
-          docId: publicView.docId,
-          roomKey: publicView.key,
-        });
+        // View-only visitors join the same room so they receive live updates
+        // and collaborators, but keep the editor in view mode.
+        const [collabScene, persisted] = await Promise.all([
+          opts.collabAPI
+            ? opts.collabAPI
+                .startCollaboration(
+                  { roomId: doc.room_id, roomKey: publicView.key },
+                  doc.id,
+                )
+                .catch((error) => {
+                  console.error("Failed to start collaboration", error);
+                  return null;
+                })
+            : Promise.resolve(null),
+          loadDocScene({
+            docId: publicView.docId,
+            roomKey: publicView.key,
+          }).catch((error) => {
+            console.error("Failed to load public scene", error);
+            return null;
+          }),
+        ]);
 
         appJotaiStore.set(activeDocAtom, {
           docId: publicView.docId,
@@ -465,10 +482,29 @@ const initializeScene = async (opts: {
           isMember: false,
         });
 
+        const baseElements = persisted ?? collabScene?.elements ?? [];
+
         return {
           scene: {
-            elements: elements ?? [],
-            appState: { viewModeEnabled: true, isLoading: false },
+            ...collabScene,
+            appState: {
+              ...restoreAppState(
+                {
+                  ...collabScene?.appState,
+                  theme:
+                    localDataState?.appState?.theme ||
+                    collabScene?.appState?.theme,
+                },
+                opts.excalidrawAPI.getAppState(),
+              ),
+              viewModeEnabled: true,
+              isLoading: false,
+            },
+            elements: reconcileElements(
+              baseElements,
+              opts.excalidrawAPI.getSceneElementsIncludingDeleted() as RemoteExcalidrawElement[],
+              opts.excalidrawAPI.getAppState(),
+            ),
           },
           isExternalScene: true,
           id: doc.room_id,
@@ -629,8 +665,6 @@ const initializeScene = async (opts: {
 
 const ExcalidrawWrapper = () => {
   const excalidrawAPI = useExcalidrawAPI();
-
-  useCloudDocLiveSync(excalidrawAPI);
 
   useEffect(() => {
     return () => {

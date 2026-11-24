@@ -1,19 +1,21 @@
-import { reconcileElements } from "@excalidraw/excalidraw";
 import { MIME_TYPES, toBrandedType } from "@excalidraw/common";
+import { reconcileElements } from "@excalidraw/excalidraw";
 import { decompressData } from "@excalidraw/excalidraw/data/encode";
 import {
-  encryptData,
   decryptData,
+  encryptData,
 } from "@excalidraw/excalidraw/data/encryption";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 import { getSceneVersion } from "@excalidraw/element";
 
 import type { RemoteExcalidrawElement } from "@excalidraw/excalidraw/data/reconcile";
+
 import type {
   ExcalidrawElement,
   FileId,
   OrderedExcalidrawElement,
 } from "@excalidraw/element/types";
+
 import type {
   AppState,
   BinaryFileData,
@@ -21,19 +23,15 @@ import type {
   DataURL,
 } from "@excalidraw/excalidraw/types";
 
-import { FILE_CACHE_MAX_AGE_SEC } from "../app_constants";
+import { ApiError, apiFetch, apiFetchBlob } from "../lib/api";
 import { base64ToBytes, bytesToBase64 } from "../lib/base64";
-import {
-  getSupabase,
-  normalizeStoragePath,
-  STORAGE_BUCKET,
-} from "../lib/supabase";
 
 import { getSyncableElements } from ".";
 
-import type { SyncableExcalidrawElement } from ".";
 import type Portal from "../collab/Portal";
 import type { Socket } from "socket.io-client";
+
+import type { SyncableExcalidrawElement } from ".";
 
 type StoredScene = {
   scene_version: number;
@@ -99,28 +97,23 @@ export const saveFiles = async ({
   prefix: string;
   files: { id: FileId; buffer: Uint8Array }[];
 }) => {
-  const supabase = getSupabase();
-  const base = normalizeStoragePath(prefix);
-
+  const base = prefix
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/+$/, "");
   const erroredFiles: FileId[] = [];
   const savedFiles: FileId[] = [];
 
   await Promise.all(
     files.map(async ({ id, buffer }) => {
       try {
-        const { error } = await supabase.storage
-          .from(STORAGE_BUCKET)
-          .upload(`${base}/${id}`, new Uint8Array(buffer).buffer, {
-            cacheControl: `public, max-age=${FILE_CACHE_MAX_AGE_SEC}`,
-            contentType: "application/octet-stream",
-            upsert: true,
-          });
-
-        if (error) {
-          throw error;
-        }
+        await apiFetch(`/files/${base}/${id}`, {
+          method: "PUT",
+          body: buffer,
+          headers: { "content-type": "application/octet-stream" },
+        });
         savedFiles.push(id);
-      } catch (error: any) {
+      } catch (error) {
         erroredFiles.push(id);
       }
     }),
@@ -139,17 +132,10 @@ const createStoredScene = async (
 };
 
 const readStoredScene = async (roomId: string) => {
-  const { data, error } = await getSupabase()
-    .from("scenes")
-    .select("scene_version, iv, ciphertext")
-    .eq("room_id", roomId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return (data as StoredScene | null) ?? null;
+  const { scene } = await apiFetch<{ scene: StoredScene | null }>(
+    `/legacy/scenes/${encodeURIComponent(roomId)}`,
+  );
+  return scene;
 };
 
 const MAX_SAVE_ATTEMPTS = 3;
@@ -188,21 +174,22 @@ export const saveScene = async (
 
     const storedScene = await createStoredScene(reconciledElements, roomKey);
 
-    const { error } = await getSupabase().rpc("save_anonymous_scene", {
-      p_room_id: roomId,
-      p_base_version: baseVersion,
-      p_scene_version: storedScene.sceneVersion,
-      p_iv: storedScene.iv,
-      p_ciphertext: storedScene.ciphertext,
-    });
-
-    if (!error) {
+    try {
+      await apiFetch(`/legacy/scenes/${encodeURIComponent(roomId)}`, {
+        method: "PUT",
+        json: {
+          baseVersion,
+          sceneVersion: storedScene.sceneVersion,
+          iv: storedScene.iv,
+          ciphertext: storedScene.ciphertext,
+        },
+      });
       SceneVersionCache.set(socket, reconciledElements);
       return toBrandedType<RemoteExcalidrawElement[]>(reconciledElements);
-    }
-
-    if (error.code !== "40001") {
-      throw error;
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 409)) {
+        throw error;
+      }
     }
   }
 
@@ -238,8 +225,10 @@ export const loadFiles = async (
   decryptionKey: string,
   filesIds: readonly FileId[],
 ) => {
-  const supabase = getSupabase();
-  const base = normalizeStoragePath(prefix);
+  const base = prefix
+    .replace(/^\/+/, "")
+    .replace(/\/{2,}/g, "/")
+    .replace(/\/+$/, "");
 
   const loadedFiles: BinaryFileData[] = [];
   const erroredFiles = new Map<FileId, true>();
@@ -247,15 +236,8 @@ export const loadFiles = async (
   await Promise.all(
     [...new Set(filesIds)].map(async (id) => {
       try {
-        const { data, error } = await supabase.storage
-          .from(STORAGE_BUCKET)
-          .download(`${base}/${id}`);
-
-        if (error || !data) {
-          throw error || new Error("missing file");
-        }
-
-        const arrayBuffer = await data.arrayBuffer();
+        const blob = await apiFetchBlob(`/files/${base}/${id}`);
+        const arrayBuffer = await blob.arrayBuffer();
 
         const { data: decoded, metadata } =
           await decompressData<BinaryFileMetadata>(

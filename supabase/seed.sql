@@ -1,1 +1,0 @@
--- No seed data. Local users are created through the app / Inbucket flow.

@@ -40,4 +40,12 @@ export const verifyPassword = (password: string, stored: string | null) => {
 
 export const generateRoomId = () => randomBytes(10).toString("base64url");
 
-export const generateRoomKey = () => randomBytes(32).toString("base64url");
+/**
+ * Excalidraw encrypts cloud scenes with AES-128-GCM and imports the room key
+ * as a JWK `oct` key with `alg: "A128GCM"`. The JWK `k` member must therefore
+ * be exactly 16 bytes, so the server must generate 128-bit keys.
+ */
+const ENCRYPTION_KEY_BYTES = 16;
+
+export const generateRoomKey = () =>
+  randomBytes(ENCRYPTION_KEY_BYTES).toString("base64url");

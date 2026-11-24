@@ -20,6 +20,8 @@ logs
 node_modules
 npm-debug.log*
 package-lock.json
+# the server image installs from this lockfile
+!server/package-lock.json
 yarn-debug.log*
 yarn-error.log*
 packages/excalidraw/types
@@ -28,7 +30,3 @@ dev-dist
 html
 meta*.json
 .claude
-
-# supabase local state
-supabase/.temp/
-supabase/.branches/

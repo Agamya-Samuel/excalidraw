@@ -40,8 +40,6 @@ import { newElement } from "@excalidraw/element";
 
 import { CaptureUpdateAction } from "@excalidraw/element";
 
-import type { Scene } from "@excalidraw/element";
-
 import type {
   ExcalidrawElement,
   ExcalidrawLinearElement,
@@ -65,14 +63,20 @@ import type { ActionResult } from "./types";
 import type { AppClassProperties, AppState } from "../types";
 
 /**
- * Frees the container's text as it rendered: wrapped the same, at a fixed
- * width.
+ * Frees the container's text as it rendered (wrapped the same, at a fixed
+ * width), the container going back to the height it had without it.
  */
 export const unbindTextFromContainer = (
   container: ExcalidrawElement,
   boundTextElement: ExcalidrawTextElementWithContainer,
-  scene: Scene,
+  app: AppClassProperties,
 ) => {
+  const { scene } = app;
+  const originalContainerHeight = getOriginalContainerHeightFromCache(
+    container.id,
+  );
+  resetOriginalContainerCache(container.id);
+
   const { x, y } = computeBoundTextPosition(
     container,
     boundTextElement,
@@ -91,6 +95,15 @@ export const unbindTextFromContainer = (
       (ele) => ele.id !== boundTextElement.id,
     ),
   });
+
+  if (isStickyNoteElement(container)) {
+    // an empty note sits at its base height; bound arrows follow
+    updateStickyNoteLayout(container, scene, {
+      renderEnvironment: app.renderEnvironment,
+    });
+  } else if (originalContainerHeight) {
+    scene.mutateElement(container, { height: originalContainerHeight });
+  }
 };
 
 export const actionUnbindText = register({
@@ -110,21 +123,7 @@ export const actionUnbindText = register({
       const boundTextElement = getBoundTextElement(element, elementsMap);
       if (boundTextElement) {
         freedTextElements.push(boundTextElement);
-        const originalContainerHeight = getOriginalContainerHeightFromCache(
-          element.id,
-        );
-        resetOriginalContainerCache(element.id);
-        unbindTextFromContainer(element, boundTextElement, app.scene);
-        if (isStickyNoteElement(element)) {
-          // an empty note sits at its base height; bound arrows follow
-          updateStickyNoteLayout(element, app.scene);
-        } else {
-          app.scene.mutateElement(element, {
-            height: originalContainerHeight
-              ? originalContainerHeight
-              : element.height,
-          });
-        }
+        unbindTextFromContainer(element, boundTextElement, app);
       }
     });
     return {
@@ -245,7 +244,12 @@ export const bindTextToContainer = (
     ...(stickyInk ? { strokeColor: stickyInk } : null),
   });
   const originalContainerHeight = container.height;
-  redrawTextBoundingBox(textElement, container, app.scene);
+  redrawTextBoundingBox(
+    textElement,
+    container,
+    app.scene,
+    app.renderEnvironment,
+  );
   // overwritting the cache with original container height so
   // it can be restored when unbind
   updateOriginalContainerCache(container.id, originalContainerHeight);
@@ -267,7 +271,7 @@ export const bindTextToContainer = (
   };
 };
 
-const pushTextAboveContainer = (
+export const pushTextAboveContainer = (
   elements: readonly ExcalidrawElement[],
   container: ExcalidrawElement,
   textElement: ExcalidrawTextElement,
@@ -415,7 +419,12 @@ export const wrapTextsInContainers = (
       autoResize: true,
     });
 
-    redrawTextBoundingBox(textElement, container, app.scene);
+    redrawTextBoundingBox(
+      textElement,
+      container,
+      app.scene,
+      app.renderEnvironment,
+    );
 
     updatedElements = pushContainerBelowText(
       [...updatedElements, container],

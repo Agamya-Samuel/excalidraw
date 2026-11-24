@@ -14,6 +14,7 @@ import {
   ACTIVE_THRESHOLD,
   UserIdleState,
   assertNever,
+  debounce,
   isDevEnv,
   isTestEnv,
   preventUnload,
@@ -118,7 +119,11 @@ import type {
 
 export const collabAPIAtom = atom<CollabAPI | null>(null);
 export const isCollaboratingAtom = atom(false);
-export const isOfflineAtom = atom(false);
+export const isOfflineAtom = atom(
+  typeof navigator !== "undefined" && !navigator.onLine,
+);
+
+const OFFLINE_STATUS_DEBOUNCE_TIMEOUT = 1000;
 
 interface CollabState {
   errorMessage: string | null;
@@ -259,8 +264,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   componentDidMount() {
     window.addEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
-    window.addEventListener("online", this.onOfflineStatusToggle);
-    window.addEventListener("offline", this.onOfflineStatusToggle);
+    window.addEventListener("online", this.onOfflineStatusChange);
+    window.addEventListener("offline", this.onOfflineStatusChange);
     window.addEventListener("online", this.onOnline);
     window.addEventListener("pagehide", this.onPageHide);
     window.addEventListener(EVENT.UNLOAD, this.onUnload);
@@ -314,6 +319,11 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     appJotaiStore.set(isOfflineAtom, !window.navigator.onLine);
   };
 
+  onOfflineStatusChange = debounce(
+    this.onOfflineStatusToggle,
+    OFFLINE_STATUS_DEBOUNCE_TIMEOUT,
+  );
+
   componentWillUnmount() {
     // Leaving a cloud board must persist pending edits and close the socket.
     // Otherwise the detached socket keeps the collab room non-empty, so the
@@ -323,8 +333,9 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
     this.destroySocketClient();
 
-    window.removeEventListener("online", this.onOfflineStatusToggle);
-    window.removeEventListener("offline", this.onOfflineStatusToggle);
+    window.removeEventListener("online", this.onOfflineStatusChange);
+    window.removeEventListener("offline", this.onOfflineStatusChange);
+    this.onOfflineStatusChange.cancel();
     window.removeEventListener("online", this.onOnline);
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);

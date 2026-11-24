@@ -13,6 +13,25 @@ Please add the latest change on the top under the correct section.
 
 ## Unreleased
 
+### Minimap, zoom menu and `ui.disabled` (2026-11-12) [#12605](https://github.com/excalidraw/excalidraw/pull/12605), [#12606](https://github.com/excalidraw/excalidraw/pull/12606)
+
+- A toggleable minimap above the bottom-left canvas actions: drag its viewport (or press outside of it) to pan, wheel over it to zoom. Toggled from the footer button next to the zoom level, the Preferences menu, the command palette and the context menu; stored as `appState.minimapEnabled` (in the browser, not in exported files). Not shown on phones or in editors shorter than 500px.
+- The zoom out / zoom in buttons are replaced by a zoom menu on the zoom level (zoom in and out, zoom to fit, zoom to selection, reset zoom), sharing the footer island with the minimap toggle. The zoom in, zoom out and reset zoom actions are unchanged.
+- New `ui={{ disabled: { minimap: true } }}`, the opt-out form of the `ui` prop: the full default UI minus the listed controls. It removes the minimap and every way to toggle it.
+- Without the minimap toggle (`ui.disabled.minimap`, or the reduced UI of `ui={{ enabled: { zoom: true } }}`), the zoom controls stay the zoom out / zoom level / zoom in buttons.
+
+### Arrows aren't clipped to frames (2026-10-31) [#12516](https://github.com/excalidraw/excalidraw/pull/12516)
+
+- Arrows and their labels are no longer clipped to the frame they belong to, so they can connect elements across and out of frames, and their part outside the frame can be selected. They still belong to their frame, so they're moved, copied and deleted with it, but only while one of their ends is in it (bound to an element in the frame, or inside it). An arrow whose ends both leave its frame (moved, bound to elements outside it, or with the elements it's bound to) leaves the frame.
+- Exporting a frame (and `getElementsOverlappingFrame`) now includes other frames' arrows that reach into it, like other elements overlapping it.
+- Moving a frame (dragging it, with the arrow keys or from the stats panel) keeps its arrows bound to the elements that don't move with it, instead of unbinding them.
+
+### Flowchart navigation (2026-10-30) [#12502](https://github.com/excalidraw/excalidraw/pull/12502)
+
+- Alt+arrow keys move the selection to the flowchart node that's visually next in that direction, whether or not it's linked to the selected node. They used to follow only the arrows bound to the pressed side, cycle through siblings on repeated presses, and fall back to any linked node when nothing was that way.
+- The nearest node of the first non-empty tier wins: nodes in line (sharing the row for ←/→, the column for ↑/↓), then linked nodes whose center lies past the selected node's edge, then nodes whose center lies within the 45° cone of the pressed direction, then any node whose center lies past that edge. Near-ties go to linked nodes, then the node more level with the selected one's center, then reading order.
+- Nodes connected by plain (non-elbow) arrows now count as part of the flowchart too, both for Alt+arrow navigation and for the nodes Ctrl+arrows keeps new nodes clear of.
+
 ### Export API: `exportScene` (2026-10-18) [#12347](https://github.com/excalidraw/excalidraw/pull/12347)
 
 Breaking. `exportToCanvas`, `exportToBlob` and `exportToSvg` (in both `@excalidraw/excalidraw` and `@excalidraw/utils`) are replaced by a single `exportScene`, and every rendering option moved from `appState` into an explicit `config`.
@@ -36,7 +55,7 @@ Breaking. `exportToCanvas`, `exportToBlob` and `exportToSvg` (in both `@excalidr
   | `maxWidthOrHeight`, `exportingFrame`, `renderEmbeddables`, `skipInliningFonts`, `reuseImages` | same names, in `config` |
 
 - New sizing options: `width`/`height` (only one given: the other follows the content's aspect ratio), `widthOrHeight` (scales the longest side to exactly that size), `fit: "contain" | "none"` and `position: "center" | "topLeft"` within a `width`/`height` frame, and `x`/`y`/`origin` to export a region (cropped, with padding on all sides). The size options are mutually exclusive in the types, and `fit`, `position` and `x`/`y` only combine with `width`/`height`.
-- `config.environment` for non-browser hosts: `createCanvas` (e.g. `node-canvas`) and `loadFonts`.
+- `config.environment` for non-browser hosts and other windows, the same for every format: `createCanvas` (e.g. `node-canvas`), `createImage`, `createPath`, `document` (the one SVG is built in, e.g. `linkedom`), `textMetrics` and `loadFonts`.
 - Canvas dimensions are rounded instead of truncated, so float noise no longer costs a pixel (a 20.5px frame-label band now rounds up), and are at least 1px (flat content with no padding used to produce an empty canvas that couldn't be encoded).
 - In dark exports, frame names now use the editor's dark frame-name color (they were dark-filtered twice and came out lighter).
 
@@ -162,6 +181,8 @@ The toolbar UI was rewritten from hidden radio/checkbox inputs to real `<button>
 
 ### Other Breaking changes
 
+- `convertToExcalidrawElements()` places bound arrows where their bindings put them, as the editor does whenever it updates their bindings (e.g. on undo/redo, or moving what they're bound to), instead of keeping their ends exactly where given. An end given just short of what it's bound to is extended onto it, and one beyond its binding area is unbound. Shapes created from an arrow's `start`/`end` are placed along its end segment. [#12425](https://github.com/excalidraw/excalidraw/pull/12425)
+
 - `UIAppState` no longer includes `zoom`, `shouldCacheIgnoreZoom`, and the canvas-interaction transients `snapLines`, `originSnapOffset`, `suggestedBinding`, `frameToHighlight`, and `elementsToHighlight`. These update per pointermove or per animation frame and no longer re-render the editor UI, so UI render props receiving `UIAppState` (`renderCustomStats`, custom `<Footer/>` content, etc.) don't receive them anymore and would render stale values if they read them off the full `AppState`. Subscribe through `useExcalidrawStateValue` instead — the component re-renders only when the selected value changes:
 
   ```tsx
@@ -194,6 +215,10 @@ The toolbar UI was rewritten from hidden radio/checkbox inputs to real `<button>
   - `onExcalidrawAPI` is now called on mount (instead of during constructor), and later on unmount (with `null` value). The API may be removed altogether in the future (you can use `onMount` & `onUnmount` to manage the `ExcalidrawAPI` object (e.g. to cache it to a global state), already).
 
 ### Other Features
+
+- Mermaid diagrams (in the TTD dialog and on paste) are converted with `@excalidraw/mermaid-to-excalidraw` v3, which lays them out with [Pele](https://pele.run) instead of Mermaid, no longer bundled. Layouts differ from before, `swimlane-beta` diagrams are supported, and Gantt charts, quadrant charts and timelines are converted to elements instead of an image. Each diagram type's code is loaded the first time one is converted. Flowchart edges are elbow arrows, unless the definition sets its own curve (in its front matter or `%%{init}%%`), and class diagram namespaces are drawn as boxes like flowchart subgraphs. [#12480](https://github.com/excalidraw/excalidraw/pull/12480), [#12481](https://github.com/excalidraw/excalidraw/pull/12481), [#12535](https://github.com/excalidraw/excalidraw/pull/12535)
+
+- `label.labelPosition` (0–1) of skeleton arrows places their label along the arrow, instead of halfway. [#12425](https://github.com/excalidraw/excalidraw/pull/12425)
 
 - Added `ExcalidrawAPI.isDestroyed` flag. Set to `true` once the editor unmounts. Calling any `get*` method, `onStateChange`, or `onEvent` on a destroyed API instance will throw in development and `console.error` in production. The `ExcalidrawAPI` will be reset to `null` on unmount, but to be extra safe, you should check `ExcalidrawAPI.isDestroyed` before calling these methods to guard against subtle race conditions in your code.
 

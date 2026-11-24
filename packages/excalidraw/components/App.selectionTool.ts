@@ -44,6 +44,7 @@ import {
   transformElements,
   uncropElementSides,
   updateBoundElements,
+  removeArrowsWithoutEndInFrame,
   updateFrameMembershipOfSelectedElements,
 } from "@excalidraw/element";
 import {
@@ -509,7 +510,9 @@ export class AppSelectionTool {
           ),
         );
 
-        updateBoundElements(croppingElement, this.app.scene);
+        updateBoundElements(croppingElement, this.app.scene, {
+          renderEnvironment: this.app.renderEnvironment,
+        });
 
         this.app.setState({
           isCropping: true,
@@ -555,7 +558,9 @@ export class AppSelectionTool {
     if (updates) {
       this.app.store.scheduleCapture();
       this.app.scene.mutateElement(image, updates);
-      updateBoundElements(image, this.app.scene);
+      updateBoundElements(image, this.app.scene, {
+        renderEnvironment: this.app.renderEnvironment,
+      });
     }
     return true;
   };
@@ -701,6 +706,7 @@ export class AppSelectionTool {
         resizeY,
         pointerDownState.resize.center.x,
         pointerDownState.resize.center.y,
+        this.app.renderEnvironment,
       )
     ) {
       const elementsToHighlight = new Set<NonDeletedExcalidrawElement>();
@@ -990,6 +996,7 @@ export class AppSelectionTool {
             this.app.scene,
             snapOffset,
             event[KEYS.CTRL_OR_CMD] ? null : this.app.getEffectiveGridSize(),
+            this.app.renderEnvironment,
           );
         }
 
@@ -1186,7 +1193,11 @@ export class AppSelectionTool {
       );
 
       if (this.app.state.editingGroupId) {
-        updateGroupIdsAfterEditingGroup(elementsToAdd);
+        updateGroupIdsAfterEditingGroup(
+          elementsToAdd.filter(
+            (element) => element.frameId !== topLayerFrame.id,
+          ),
+        );
       }
 
       nextElements = addElementsToFrame(
@@ -1211,6 +1222,8 @@ export class AppSelectionTool {
       this.app.state,
       this.app,
     );
+    // the dragged arrows, and those bound to the dragged elements
+    removeArrowsWithoutEndInFrame(selectedElements, nextElements);
 
     this.app.scene.replaceAllElements(nextElements);
   };
@@ -1221,8 +1234,9 @@ export class AppSelectionTool {
    *
    * A lone selected element has none while the line editor is open or one of
    * its line points is hovered, nor does an elbow arrow, a two-point line or
-   * arrow, or (on mobile devices) any line or arrow. The selection has none in
-   * the element link selector.
+   * arrow, (on mobile devices) any line or arrow, or the text being edited
+   * (none are drawn for it; see `AppText.getEditedTextResizeHandleAt()` for
+   * its sides). The selection has none in the element link selector.
    */
   getTransformHandleAt(
     selectedElements: readonly NonDeletedExcalidrawElement[],
@@ -1245,6 +1259,7 @@ export class AppSelectionTool {
         (state.selectedLinearElement &&
           state.selectedLinearElement.hoverPointIndex !== -1) ||
         isElbowArrow(element) ||
+        element.id === state.editingTextElement?.id ||
         // HACK: Disable transform handles for linear elements on mobile until a
         // better way of showing them is found
         (isLinearElement(element) &&

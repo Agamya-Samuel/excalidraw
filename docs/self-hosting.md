@@ -59,6 +59,36 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 2. Wait for **Publish GHCR images** to finish.
 3. Redeploy the Compose service in Dokploy. With `IMAGE_TAG=latest`, it pulls the new images; with a SHA tag, bump it first.
 
+## Realtime WebSocket (optional direct path)
+
+Cloudflare can add latency to WebSocket traffic. For a lower-latency realtime path:
+
+1. In Cloudflare DNS, add a **DNS-only (grey-cloud)** `A` record:
+   - `ws.<your-domain>` → the origin IP.
+2. On the origin, add a Traefik file-provider route `/etc/dokploy/traefik/dynamic/ws.yml`:
+   ```yaml
+   http:
+     routers:
+       ws-excalidraw:
+         rule: "Host(`ws.<your-domain>`)"
+         entryPoints: [websecure]
+         service: ws-excalidraw
+         tls:
+           certResolver: letsencrypt
+       ws-excalidraw-http:
+         rule: "Host(`ws.<your-domain>`)"
+         entryPoints: [web]
+         middlewares: [redirect-to-https@file]
+         service: ws-excalidraw
+     services:
+       ws-excalidraw:
+         loadBalancer:
+           servers:
+             - url: "http://web:80"
+   ```
+3. Set the GitHub Actions repository variable `VITE_APP_WS_SERVER_URL` to `https://ws.<your-domain>` (Settings → Secrets and variables → Actions → Variables). The publish workflow passes it to the web build; no URL is hardcoded in the repo.
+4. The main site can stay proxied through Cloudflare; only the socket connects directly to the origin.
+
 ## Accounts
 
 There is no public signup. The owner is created from `OWNER_EMAIL` / `OWNER_PASSWORD` on API boot. To add someone:

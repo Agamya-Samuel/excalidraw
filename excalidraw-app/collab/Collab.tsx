@@ -273,7 +273,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     window.addEventListener("offline", this.onOfflineStatusChange);
     window.addEventListener("online", this.onOnline);
     window.addEventListener("pagehide", this.onPageHide);
-    window.addEventListener(EVENT.UNLOAD, this.onUnload);
 
     const unsubOnUserFollow = this.excalidrawAPI.onUserFollow((payload) => {
       this.setUserToFollow(
@@ -347,7 +346,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     window.removeEventListener("online", this.onOnline);
     window.removeEventListener("pagehide", this.onPageHide);
     window.removeEventListener(EVENT.BEFORE_UNLOAD, this.beforeUnload);
-    window.removeEventListener(EVENT.UNLOAD, this.onUnload);
     window.removeEventListener(EVENT.POINTER_MOVE, this.onPointerMove);
     window.removeEventListener(
       EVENT.VISIBILITY_CHANGE,
@@ -368,10 +366,6 @@ class Collab extends PureComponent<CollabProps, CollabState> {
 
   private setIsCollaborating = (isCollaborating: boolean) => {
     appJotaiStore.set(isCollaboratingAtom, isCollaborating);
-  };
-
-  private onUnload = () => {
-    this.destroySocketClient({ isUnload: true });
   };
 
   private beforeUnload = withBatchedUpdates((event: BeforeUnloadEvent) => {
@@ -1167,9 +1161,14 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     }
   };
 
-  private onPageHide = () => {
+  private onPageHide = (event: PageTransitionEvent) => {
     if (this.docId) {
       void this.writeDraft();
+    }
+    // `pagehide` also fires when the page enters the back/forward cache; only
+    // tear down the socket when the page is actually going away.
+    if (!event.persisted) {
+      this.destroySocketClient({ isUnload: true });
     }
   };
 
